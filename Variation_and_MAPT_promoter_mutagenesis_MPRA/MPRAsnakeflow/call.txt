@@ -1,0 +1,5 @@
+PYTHONUNBUFFERED=1 snakemake -p -c 30 --sdm conda \
+--snakefile /cluster/home/rhauser/MPRAsnakeflow/workflow/Snakefile \
+--configfile /cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/count.yaml \
+--executor slurm --jobs 25 --rerun-incomplete \
+2>&1 | tee rmhex03snakemake_main3.log
