@@ -1,0 +1,206 @@
+---
+title: "remove duplicate barcodes"
+author: "Becky"
+date: "2025-06-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(rtracklayer)
+library(ggplot2)
+library(Biostrings)
+
+
+```
+
+```{r}
+#import fasta file used to order pool
+varmpra <- (readDNAStringSet("/cluster/home/rhauser/files/rmhex03/design/newfinalvarmpra2.fasta"))
+
+#remove duplicated sequences (overrepresented common variants)
+uniquevarmpra <- unique(varmpra)
+
+#getallids
+varmpraids <- tibble(id=names(varmpra))
+  
+#find ids of special delete controls (these controls are identical but different sizes (deletions from the ends))
+deletecontrols <- varmpraids %>% filter(grepl("_delete", id))
+deletecontrols_cleaned <- deletecontrols %>% mutate(id = str_replace(id, "_delete.*", ""))
+deletecontrols_cleaned_unique <- unique(deletecontrols_cleaned)
+deletecontrols_patterns <- paste(deletecontrols_cleaned_unique$id, collapse = "|")
+
+#import dictionaries for all oligosizes as tsvs
+dict219 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc219/outputcalledmapq/assoc_basic_219_called_shorttime2_mapq/assoc_basic_219_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+dict218 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc218/outputcalledmapq/assoc_basic_218_called_shorttime2_mapq/assoc_basic_218_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+dict216 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc216/outputcalledmapq/assoc_basic_216_called_shorttime2_mapq/assoc_basic_216_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+dict214 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc214/outputcalledmapq/assoc_basic_214_called_shorttime2_mapq/assoc_basic_214_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+dict212 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc212/outputcalledmapq/assoc_basic_212_called_shorttime2_mapq/assoc_basic_212_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+dict210 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc210/outputcalledmapq/assoc_basic_210_called_shorttime2_mapq/assoc_basic_210_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+dict208 <- read_tsv("/cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/bcassoc208/outputcalledmapq/assoc_basic_208_called_shorttime2_mapq/assoc_basic_208_called_shorttime2_mapq_filtered_coords_to_barcodes.tsv")
+
+#remove delete controls from earlier
+dict219_deletecontrols <- dict219 %>% filter(str_detect(id, deletecontrols_patterns))
+dict219_nodeletecontrols <- dict219 %>% filter(!str_detect(id, deletecontrols_patterns))
+dict218_deletecontrols <- dict218 %>% filter(str_detect(id, deletecontrols_patterns))
+dict218_nodeletecontrols <- dict218 %>% filter(!str_detect(id, deletecontrols_patterns))
+dict216_deletecontrols <- dict216 %>% filter(str_detect(id, deletecontrols_patterns))
+dict216_nodeletecontrols <- dict216 %>% filter(!str_detect(id, deletecontrols_patterns))
+dict214_deletecontrols <- dict214 %>% filter(str_detect(id, deletecontrols_patterns))
+dict214_nodeletecontrols <- dict214 %>% filter(!str_detect(id, deletecontrols_patterns))
+dict212_deletecontrols <- dict212 %>% filter(str_detect(id, deletecontrols_patterns))
+dict212_nodeletecontrols <- dict212 %>% filter(!str_detect(id, deletecontrols_patterns))
+dict210_deletecontrols <- dict210 %>% filter(str_detect(id, deletecontrols_patterns))
+dict210_nodeletecontrols <- dict210 %>% filter(!str_detect(id, deletecontrols_patterns))
+dict208_deletecontrols <- dict208 %>% filter(str_detect(id, deletecontrols_patterns))
+dict208_nodeletecontrols <- dict208 %>% filter(!str_detect(id, deletecontrols_patterns))
+
+#combine dictionaries
+dictcombine <- bind_rows(dict219_nodeletecontrols, dict218_nodeletecontrols, dict216_nodeletecontrols, dict214_nodeletecontrols, dict212_nodeletecontrols, dict210_nodeletecontrols, dict208_nodeletecontrols)
+
+#remove duplicate barcodes
+dictcombine_cleaned <- dictcombine %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+
+#handling the delete controls. not allowing any smaller length to have the same barcodes as the longer lengths.
+delete1 <- bind_rows(dict219_deletecontrols, dict218_deletecontrols)
+delete1clean <- delete1 %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+delete2 <- bind_rows(delete1clean, dict216_deletecontrols)
+delete2clean <- delete2 %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+delete3 <- bind_rows(delete2clean, dict214_deletecontrols)
+delete3clean <- delete3 %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+delete4 <- bind_rows(delete3clean, dict212_deletecontrols)
+delete4clean <- delete4 %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+delete5 <- bind_rows(delete4clean, dict210_deletecontrols)
+delete5clean <- delete5 %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+delete6 <- bind_rows(delete5clean, dict208_deletecontrols)
+delete6clean <- delete6 %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+
+#combine all dictionaries and remove duplicate barcodes
+dictcombineall <- bind_rows(dictcombine_cleaned, delete6clean)
+dictcombineall_clean <- dictcombineall %>% filter(!(duplicated(barcode) | duplicated(barcode, fromLast =TRUE)))
+
+write_tsv(dictcombineall_clean, "combineddict.tsv")
+
+
+```
+
+```{r}
+#get count summaries per region
+dictcount <- dictcombineall_clean %>% count(id, name="bccount")
+
+#add in any ids where the barcode count is 0
+merged_dictcount <- dictcount %>%
+  full_join(distinct(varmpraids, id), by = "id") %>%
+  mutate(bccount = replace_na(bccount, 0))
+
+write_tsv(merged_dictcount, "barcode_counts_per_id.tsv")
+
+merged_dictcount <- read_tsv("barcode_counts_per_id.tsv")
+
+summary(merged_dictcount)
+
+merged_dictcount0 <- merged_dictcount %>% filter(bccount==0)
+merged_dictcount50 <- merged_dictcount %>% filter(bccount<50)
+```
+
+```{r}
+#visualize data
+merged_dictcount$group <- "all"
+
+bcsperregions <- ggplot(merged_dictcount, aes(x=group, y=bccount)) +
+  geom_violin(fill="plum1") +
+  geom_hline(yintercept = 706, linetype = "dashed", color = "red", size =1) +
+  theme_classic()
+ggsave(filename="barcodes_per_region.pdf", plot=bcsperregions, width=4.44, height=4.44, units="in")
+
+
+```
+
+```{R}
+#visualize mapt promoter mutagenesis
+merged_dictcount_mapt <- merged_dictcount %>% filter(grepl("maptprom", id))
+merged_dictcount_mapt <- merged_dictcount_mapt %>% mutate(group = if_else(str_detect(id, "ref"), "ref", group))
+merged_dictcount_mapt <- merged_dictcount_mapt %>% mutate(group = if_else(str_detect(id, "scram"), "scram", group))
+merged_dictcount_mapt <- merged_dictcount_mapt %>% mutate(group = if_else(str_detect(id, "alt"), "alt", group))
+
+#extract location number
+merged_dictcount_mapt <- merged_dictcount_mapt %>% mutate(location = str_split(id, "_", simplify = TRUE)[, 3])
+merged_dictcount_mapt <- merged_dictcount_mapt %>% arrange(by=location)
+
+maptprom <- ggplot(merged_dictcount_mapt, aes(x=location, y=bccount, color=group)) +
+  geom_point(alpha=0.5, size=1) +
+  scale_color_manual(values = c("alt" = "mediumorchid2", "scram" = "dodgerblue", "ref" = "black")) +
+  geom_hline(yintercept=50, linetype="dashed", color = "red")
+ggsave(filename="maptprom_barcodes.pdf", plot=maptprom, width=4.44, height=4.44, units="in")
+
+merged_dictcount_maptnoscram <- merged_dictcount_mapt %>% filter(!grepl("scram",id))
+
+maptprom_noscram <- ggplot(merged_dictcount_maptnoscram, aes(x=location, y=bccount, color=group)) +
+  geom_point(alpha=0.5, size=1) +
+  scale_color_manual(values = c("alt" = "mediumorchid2", "ref" = "black")) +
+  geom_hline(yintercept=50, linetype="dashed", color = "red")
+ggsave(filename="maptprom_barcodes_noscram.pdf", plot=maptprom_noscram, width=4.44, height=4.44, units="in")
+
+
+maptprom50 <- merged_dictcount_maptnoscram %>% filter(bccount <50)
+maptprom0 <- merged_dictcount_maptnoscram %>% filter(bccount ==0)
+```
+
+```{r}
+varkey <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/variant_reference_key.tsv")
+
+#add alt barcode counts
+varkey <- varkey %>%
+  left_join(merged_dictcount %>% select(id, bccount), by = "id") %>%
+  dplyr::rename(count=bccount)
+
+#add ref barcode counts
+varkey <- varkey %>%
+  left_join(
+    merged_dictcount %>% select(id, bccount),
+    by = c("control" = "id")
+  ) %>%
+  dplyr::rename(refcount = bccount)
+
+#add groups
+varkey <- varkey %>%
+  mutate(
+    group = case_when(
+      str_detect(control, fixed("SNV", ignore_case = TRUE)) ~ "SNV",
+      str_detect(control, regex("^delete_|^insert_", ignore_case = TRUE)) ~ "indel",
+      str_detect(control, fixed("mapt", ignore_case = TRUE)) ~ "MAPT",
+      TRUE ~ NA_character_
+    )
+  )
+
+write_tsv(varkey, "varkeybcdictcounts.tsv")
+
+
+```
+
+```{r}
+
+# Reshape wide to long
+varkey_long <- varkey %>%
+  pivot_longer(cols = c(refcount, count), names_to = "type", values_to = "value")
+
+# Optional: Set order
+varkey_long$group <- factor(varkey_long$group, levels = c("SNV", "indel", "MAPT"))
+
+# Plot
+bcrefplot <- ggplot(varkey_long, aes(x = group, y = value, fill = type)) +
+  geom_boxplot(position = position_dodge(0.75), outlier.alpha = 0.1) +
+  #stat_summary(fun = mean, geom = "point", shape = 20, size = 3,
+               #position = position_dodge(0.75), color = "black") +
+  labs(x = "Group", y = "Count", fill = "Type") +
+  theme_minimal() +
+  scale_fill_manual(values = c("refcount" = "#C8C8C8", "count" = "#F88CC7")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave(filename="barcodes_referencepairs_box.pdf", plot=bcrefplot, width=4.44, height=4.44, units="in")
+
+
+```
