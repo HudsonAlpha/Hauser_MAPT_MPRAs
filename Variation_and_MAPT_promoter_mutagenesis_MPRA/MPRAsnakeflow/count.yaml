@@ -1,0 +1,26 @@
+---
+version: "0.5"
+skip_version_check: false
+
+experiments:
+  rmhex03Count:
+    bc_length: 15
+    umi_length: 16
+    data_folder: /cluster/home/rhauser/files/rmhex03/combinedFastqs
+    experiment_file: /cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/experiment_file_rmhex03.csv
+    demultiplex: false
+    label_file: /cluster/home/rhauser/files/rmhex03/design/labelfile_rmhex03.tsv
+    assignments:
+      fromFile:
+        type: file
+        assignment_file: /cluster/home/rhauser/files/rmhex03/bcassoc/bcassoc_reseq/mergedictionaries/combineddict_mprasnakeflow.tsv.gz
+    configs:
+      default:
+	filter:
+          bc_threshold: 10
+          min_dna_counts: 1
+          min_rna_counts: 1
+          outlier_detection:
+            method: rna_counts_zscore
+            times_zscore: 3
+
