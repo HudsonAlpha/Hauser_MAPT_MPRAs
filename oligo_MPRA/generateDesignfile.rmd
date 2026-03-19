@@ -1,0 +1,410 @@
+---
+title: "Generate Oligo List for MPRA"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+date: "2023-02-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Generate Bed file for ROI
+
+
+```{r , warning = FALSE, message = FALSE}
+library(dplyr)
+
+
+#### This script generates oligo sequences for an array from a bed file. 
+#### Input is a bedfile with at least 4 columns (chr, start, end, and name)
+####
+#### EDIT THESE PARAMETERS
+####
+# set element size and coverage. Sliding window is elementsize/coverage rounded
+# down (56.6 = 56)
+# give ending file a name
+elementsize <- 270
+coverage <- 3
+slidewindow <- floor(elementsize/coverage)
+filename <- "bedfile_nostrand.bed"
+
+####
+#### READ IN BEDFILE
+####
+
+# assuming we have a bed file with at least 4 columns, chr, start, end, and name
+bedfile <-  as_tibble(read.table("gapsandbrilucpos.bed", 
+                                 header = FALSE))
+bedfile <- bedfile %>% dplyr::rename( "chr" = "V1", 
+                                      "start" = "V2", 
+                                      "end" = "V3", 
+                                      "name" = "V4")
+
+
+
+# extend region start and end by elementsize to ensure full coverage from start
+# to end of seq
+bedextend <- bedfile %>% mutate(start = start - elementsize) %>%
+  mutate(end = end + elementsize)
+
+# initialize vectors for for loop
+allstart <- c()
+allnames <- c()
+allchr <- c()
+
+# for each row of bedfile, generate list of sequence "start" values from bed start to end 
+# by sliding window size, add to vector with numbered names/chr number
+for (i in 1:nrow(bedextend)){
+  segstart <- seq(as.numeric(bedextend[i, 2]), 
+                  as.numeric(bedextend[i, 3]), 
+                  by = slidewindow)
+  names <- c(paste(bedextend[i,4], 
+                   "_", 
+                   1:length(segstart), 
+                   sep =""))
+  chr <- rep(bedextend[i, 1], length(segstart))
+  allstart <- append(allstart, segstart)
+  allnames <- append(allnames, names)
+  allchr <- append(allchr, chr)
+}
+
+# create tibbles with all the chr name, start, end (start + element size), and name
+# duplicate tibble, add columns for + and - strands
+# merge tibbles so we have each segment, + and - strands
+tib <- tibble(chr = as.character(allchr), 
+              start = allstart, 
+              end = allstart + elementsize, 
+              name = allnames)
+tib$score <-  100
+#tib2 <- tib
+#tib$strand <- "+"
+#tib2$strand <- "-"
+#tib$name <- paste(tib$name, 
+#                  "_+", 
+ #                 sep = "")
+#tib2$name <- paste(tib2$name, 
+  #                 "_-", 
+   #                sep = "")
+#tibmerge <- bind_rows(tib, tib2)
+
+tib
+
+# write all beds to a bedfile
+write.table(tib, 
+            file = filename, 
+            sep = "\t", 
+            col.names = FALSE, 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+
+
+
+# send output to bash script below
+generates a tab separated list of sequences from the generated bedfile, change the reference genome to the appropriate genome
+
+# bash script
+module load cluster/bedtools/2.28.0
+
+bedtools sort -i bedfile.bed > sort.bedfile.bed
+
+bedtools getfasta -tab -name+ -s -fi /cluster/home/rhauser/genomes/chr17.fa -bed sort.bedfile.bed > fastalist.tsv
+
+# import output to r script below
+
+
+
+
+```{r addadapters, warning = FALSE, message = FALSE}
+####
+#### READ IN TAB SEPARATED FASTA FILE
+#### SET NAME FOR OUTPUT FASTA FILE
+####
+dat <- as_tibble(read.table(file = "fastalist.tsv", 
+                            sep ="\t", 
+                            header = FALSE))
+filename2 <- "finalfastalist.fa"
+
+# rename columns to make sense
+dat <- dat %>% dplyr::rename( "name" = "V1", 
+                              "sequence" = "V2")
+
+
+# add ">" to sequence name to prep for fasta format
+dat <-   mutate(dat, name = paste0(">", name))
+
+# add adapters to sequences (from Gordon et al 2020,
+# https://doi.org/10.1038/s41596-020-0333-5)
+dat <-  mutate(dat, sequence = paste("AGGACCGGATCAACT", 
+                                     sequence, 
+                                     "CATTGCGTGAACCGA", 
+                                     sep = ""))
+
+dat
+
+# write table of sequences to a fasta file
+write.table(dat, 
+            file = filename2, 
+            sep = "\n", 
+            col.names = FALSE, 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+
+
+## Negative Controls
+
+```{r scram, warning = FALSE, message = FALSE}
+# This scripts generates random DNA sequences
+library(Biostrings)
+
+# set seed so random seqs reproducible, initialize scram
+set.seed(123)
+scram <- NULL
+
+####
+#### EDIT THESE PARAMETERS
+####
+# set number of scrambled seq to generate and length of scrambled seq
+# set file name for end file
+numseq <- 100
+seqlen <- 270
+filename3 <- "scrambled.fa"
+
+# generates vector of desired number of random DNA seqs (A,C,G,T)
+for (i in 1:numseq)
+  scram = c(scram, paste(sample(DNA_ALPHABET[1:4], 
+                                seqlen, 
+                                replace = TRUE), 
+                         collapse =""))
+
+# create vector for scrambled DNA seq names
+scramnames <- c(paste0("scrambled", 1:numseq))
+scrambled <- tibble(scramnames, scram)
+
+# prep for fasta format (add > to names) and add adapters to sequences(from Gordon et al 2020)
+scrambled <-   mutate(scrambled, 
+                      scramnames = paste0(">", scramnames))
+scrambled <-  mutate(scrambled, 
+                     scram = paste("AGGACCGGATCAACT", 
+                                   scram, "CATTGCGTGAACCGA", 
+                                   sep = ""))
+
+scrambled
+write.table(scrambled, 
+            file = filename3, 
+            sep = "\n", 
+            col.names = FALSE, 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+
+# to combine ROI and Scrambled DNA FASTA files, use this shell script
+
+#cat finalfastalist.fa scrambled.fa > merged.fa
+
+```{r , warning = FALSE, message = FALSE}
+library(dplyr)
+library(tidyverse)
+
+#import datasets for areas of interest
+justbeds <- as_tibble(read_tsv("Links_GeneList_for_Becky_230209.bed", 
+                               col_names = c("chr", "start", "end", "gene", "group")))
+
+library(readxl)
+X2023_01_17_E280A_AAO_Revised_SuppTables_2_4_Cochran <- 
+  read_excel("2023.01.17_E280A-AAO_Revised-SuppTables_2-4-Cochran.xlsx", 
+             sheet = "Supp. Table 3")
+
+e280ajustbeds <- X2023_01_17_E280A_AAO_Revised_SuppTables_2_4_Cochran %>% 
+  dplyr::select(seqnames, start, end, gene, group)
+
+e280a_nodups <- e280ajustbeds %>% distinct(seqnames, start, end, .keep_all = TRUE)
+
+```
+
+```{r}
+
+#filtering for just genes we want
+app <- filter(justbeds, gene =="APP")
+snca <- filter(justbeds, gene=="SNCA")
+sorl1 <- filter(justbeds, gene == "SORL1")
+sorl1ad <- filter(justbeds, gene == "SORL1", group == "AD")
+sorl1com <- filter(justbeds, gene =="SORL1", group =="common")
+
+e280a <- e280a_nodups %>%
+  unite("name", gene:group, sep = "_", remove = TRUE) %>% dplyr::rename("chr" = seqnames)
+
+e280a$name <- paste("e280a_", e280a$name, sep ="")
+
+appmerge <- app %>% unite("name", gene:group, sep = "_", remove = TRUE) %>%
+  distinct(chr, start, end, .keep_all = TRUE) 
+
+snca <- snca %>% unite("name", gene:group, sep = "_", remove = TRUE) %>%
+  distinct(chr, start, end, .keep_all = TRUE)
+
+sorl1 <- sorl1 %>% unite("name", gene:group, sep = "_", remove = TRUE) %>%
+  distinct(chr, start, end, .keep_all = TRUE)
+
+sorl1ad <- sorl1ad %>% unite("name", gene:group, sep = "_", remove = TRUE) %>%
+  distinct(chr, start, end, .keep_all = TRUE)
+
+sorl1com <- sorl1com %>% unite("name", gene:group, sep = "_", remove = TRUE) %>%
+  distinct(chr, start, end, .keep_all = TRUE)
+
+all <- bind_rows(e280a, appmerge, snca, sorl1ad, sorl1com)
+
+all
+
+```
+
+```{r}
+
+#### This script generates oligo sequences for an array from a bed file. 
+#### Input is a bedfile with at least 4 columns (chr, start, end, and name)
+####
+#### EDIT THESE PARAMETERS
+####
+# set element size and coverage. Sliding window is elementsize/coverage rounded
+# down (56.6 = 56)
+# give ending file a name
+elementsize <- 270
+coverage <- 3
+slidewindow <- floor(elementsize/coverage)
+#filename <- "bedfile.bed"
+
+####
+#### READ IN BEDFILE
+####
+
+# assuming we have a bed file with at least 4 columns, chr, start, end, and name
+#bedfile <-  as_tibble(read.table("gapsandbrilucpos.bed", 
+#                                 header = FALSE))
+#bedfile <- bedfile %>% dplyr::rename( "chr" = "V1", 
+#                                      "start" = "V2", 
+#                                      "end" = "V3", 
+#                                      "name" = "V4")
+
+bedfile <- all
+
+# extend region start and end by elementsize to ensure full coverage from start
+# to end of seq
+bedextend <- bedfile %>% mutate(start = start - elementsize) %>%
+  mutate(end = end + elementsize)
+
+# initialize vectors for for loop
+allstart <- c()
+allnames <- c()
+allchr <- c()
+
+# for each row of bedfile, generate list of sequence "start" values from bed start to end 
+# by sliding window size, add to vector with numbered names/chr number
+for (i in 1:nrow(bedextend)){
+  segstart <- seq(as.numeric(bedextend[i, 2]), 
+                  as.numeric(bedextend[i, 3]), 
+                  by = slidewindow)
+  names <- c(paste(bedextend[i,4], 
+                   "_", 
+                   1:length(segstart), 
+                   sep =""))
+  chr <- rep(bedextend[i, 1], length(segstart))
+  allstart <- append(allstart, segstart)
+  allnames <- append(allnames, names)
+  allchr <- append(allchr, chr)
+}
+
+# create tibbles with all the chr name, start, end (start + element size), and name
+# duplicate tibble, add columns for + and - strands
+# merge tibbles so we have each segment, + and - strands
+tib <- tibble(chr = as.character(allchr), 
+              start = allstart, 
+              end = allstart + elementsize, 
+              name = allnames)
+tib$score <- 100
+tib2 <- tib
+tib$strand <- "+"
+tib2$strand <- "-"
+tib$name <- paste(tib$name, 
+                  "_+", 
+                  sep = "")
+tib2$name <- paste(tib2$name, 
+                   "_-", 
+                   sep = "")
+tibmerge <- bind_rows(tib, tib2)
+
+tibmerge
+
+# write all beds to a bedfile
+write.table(tibmerge, 
+            file = "addons.bed", 
+            sep = "\t", 
+            col.names = FALSE, 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+
+
+
+# send output to bash script below
+generates a tab separated list of sequences from the generated bedfile, change the reference genome to the appropriate genome
+
+# bash script
+module load cluster/bedtools/2.28.0
+
+bedtools sort -i addons.bed > sort.addons.bed
+
+bedtools getfasta -tab -s -name+ -fi /cluster/home/rhauser/genomes/hg38/hg38.fa -bed sort.addons.bed > addonfastalist.tsv
+
+# import output to r script below
+
+
+
+
+```{r addadapters, warning = FALSE, message = FALSE}
+####
+#### READ IN TAB SEPARATED FASTA FILE
+#### SET NAME FOR OUTPUT FASTA FILE
+####
+dat <- as_tibble(read.table(file = "addonfastalist.tsv", 
+                            sep ="\t", 
+                            header = FALSE))
+filename2 <- "addonfinalfastalist.fa"
+
+# rename columns to make sense
+dat <- dat %>% dplyr::rename( "name" = "V1", 
+                              "sequence" = "V2")
+
+
+# add ">" to sequence name to prep for fasta format
+dat <-   mutate(dat, name = paste0(">", name))
+
+# add adapters to sequences (from Gordon et al 2020,
+# https://doi.org/10.1038/s41596-020-0333-5)
+dat <-  mutate(dat, sequence = paste("AGGACCGGATCAACT", 
+                                     sequence, 
+                                     "CATTGCGTGAACCGA", 
+                                     sep = ""))
+
+dat
+
+# write table of sequences to a fasta file
+write.table(dat, 
+            file = filename2, 
+            sep = "\n", 
+            col.names = FALSE, 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+
+
+# to combine new ROI and original FASTA list, use this shell script
+
+#cat addonfinalfastalist.fa merged.fa > newmerged.fa
