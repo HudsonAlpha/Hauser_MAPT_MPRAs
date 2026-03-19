@@ -1,0 +1,269 @@
+---
+title: "BC Association Exploratory"
+author: "Becky"
+date: "2023-05-03"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r }
+df <- read_table("multbccount.txt")
+summary(df)
+
+df2 <- read_table("singlebccount.txt")
+
+df3 <- rbind(df,df2)
+summary(df3)
+
+```
+
+
+
+```{r unfiltered mult support only}
+ggplot(df, aes(count)) +
+  geom_bar() +
+  xlab("number of reads supporting a BC-CRE association") +
+  ylab("number of BCs") +
+  ggtitle("Barcode Association Stats, only BCs with at least 2 supporting reads")
+```
+
+
+```{r unfiltered all}
+ggplot(df3, aes(count)) +
+  geom_bar() +
+  xlab("number of reads supporting a BC-CRE association") +
+  ylab("number of BCs") +
+  ggtitle("Barcode Association Stats")
+
+```
+
+```{r filter data}
+singles <- read_table("barcode_association_single_support.txt")
+mults <- read_table("barcode_association_multiple_support.txt")
+all_assoc <- rbind(singles, mults)
+all_assoc
+
+all_assoc2 <- all_assoc
+
+all_assoc2$size <- all_assoc2$end - all_assoc2$start
+
+summary(all_assoc2$size)
+
+```
+
+```{r}
+rangefilt <- all_assoc %>% filter(start >= 43846930) %>% filter(end <= 47035962)
+
+rangefilt$size <- rangefilt$end - rangefilt$start
+
+rangefilt
+
+summary(rangefilt$size)
+
+data <- rangefilt %>% filter(size <= 1000)
+data2 <- all_assoc2 %>% filter(size<=1000)
+
+ggplot(data2, aes(size)) +
+  geom_histogram(binwidth = 1 ) +
+  xlab("size of CRS") +
+  ylab("number of CRSs") +
+  ggtitle("Barcode Association Stats") +
+  scale_x_continuous(breaks = c(100, 200, 300, 400, 500, 600, 700, 800, 900, 1000), minor_breaks =c(50, 150, 250, 350, 450, 550, 650, 750, 850, 950))
+
+
+ggplot(data, aes(size)) +
+  geom_histogram(binwidth = 1 ) +
+  xlab("size of CRS") +
+  ylab("number of CRSs") +
+  ggtitle("Barcode Association Stats") +
+  scale_x_continuous(breaks = c(100, 200, 300, 400, 500, 600, 700, 800, 900, 1000), minor_breaks =c(50, 150, 250, 350, 450, 550, 650, 750, 850, 950))
+
+```
+
+```{r filter by size of CRS}
+sizefilt <- rangefilt %>% filter(size >= 150) %>% filter(size <= 350)
+
+summary(sizefilt)
+
+#removing any barcodes with n's
+sizefilt <- dplyr::filter(sizefilt, !grepl("N", barcode))
+
+
+
+filtsingles <- sizefilt %>% filter(count == 1)
+filtmults <- sizefilt %>% filter(count != 1)
+summary (filtmults)
+
+
+
+
+ggplot(sizefilt,aes(count)) +
+  geom_bar() +
+  xlab("number of reads supporting a BC-CRE association") +
+  ylab("number of BCs") +
+  ggtitle("Filtered Barcode Association Stats")
+
+ggplot(filtmults, aes(count)) +
+  geom_bar() +
+  xlab("number of reads supporting a BC-CRE association") +
+  ylab("number of BCs") +
+  ggtitle("Filtered Barcode Association Stats")
+
+```
+
+```{r binning}
+sizefilt$mean <- rowMeans(sizefilt[, 2:3])
+#bins to nearest 100 on start end end range filter
+bins = seq(43846900,47036000, by = 100)
+bin100 <- sizefilt %>% mutate(bin = cut(mean, breaks = bins))
+bin100
+bp150 <- seq(43846900,47036000, by = 150)
+bin150 <- sizefilt %>% mutate(bin = cut(mean, breaks = bp150))
+#bp500 = seq(43846900,47036000, by = 500)
+#bin500 <- sizefilt %>% mutate(bin = cut(mean, breaks = bp500))
+
+
+#ggplot(bin100, aes(bin)) +
+ # geom_bar() +
+  #xlab("100bp bins") +
+  #ylab("number of BCs per bin") +
+  #ggtitle("barcode distribution")
+
+#ggplot(bin150, aes(bin)) +
+ # geom_bar() +
+  #xlab("100bp bins") +
+  #ylab("number of BCs per bin") +
+  #ggtitle("barcode distribution")
+
+#ggplot(bin500, aes(bin)) +
+#  geom_bar() +
+#  xlab("500bp bins") +
+#  ylab("number of BCs per bin") +
+#  ggtitle("barcode distribution")
+```
+
+```{r}
+#table(bin100$bin)
+counts <- as_tibble(table(bin100$bin), .name_repair = unique)
+names(counts)[1] <- "bin"
+names(counts)[2] <- "count"
+summary(counts$count)
+table(counts$count)
+freqtab <- as_tibble_row(table(counts$count))
+freqtab2 <- freqtab %>% pivot_longer(cols = everything(), names_to = "bcsperbin", values_to = "numbins")
+
+#ggplot(freqtab2, aes(bcsperbin, numbins)) +
+ # geom_smooth() +
+ # xlab("BCs/Bin") +
+#  ylab("number of bins") +
+ # ggtitle("BC/Bin distribution")
+
+```
+
+```{r}
+nobcs <- counts %>% filter(count == 0)
+nobcs
+
+```
+
+```{r only multiple support}
+#commenting out this block, this version the bins aren't sorted correctly
+
+#onlymult <- sizefilt %>% dplyr::filter(count != 1)
+#mult100 <- onlymult %>% mutate(bin = cut(mean, breaks = bins))
+
+#ggplot(mult100, aes(bin)) +
+ # geom_bar() +
+  #xlab("100bp bins") +
+  #ylab("number of BCs per bin") +
+  #ggtitle("barcode distribution, only mult supports, filtered")
+
+```
+
+```{r}
+
+write.csv(sizefilt, "filtered_bc_assocs_noNs.csv")
+
+```
+
+```{r}
+options(scipen=999)
+binsend = bins + 100
+#format(binsend, scientific=F)
+#format(bins, scientific=F)
+chr = "chr17"
+binstring = toString(bins)
+#label = str_c("bin", binstring, sep ="")
+label = bins
+designbed = tibble(chr, bins, binsend, label)
+designbed$label <- sub("^", "bin", designbed$label)
+designbed
+```
+
+
+```{r}
+write.table(designbed, "100bindesignfile3.bed", sep="\t", row.names=FALSE, col.names = FALSE, quote=FALSE)
+```
+
+```{r}
+bin100_1 <- bin100 %>% mutate(bin = as.character(bin))
+counts <- as_tibble(table(bin100_1$bin), .name_repair = unique)
+names(counts)[1] <- "bin"
+names(counts)[2] <- "count"
+summary(counts$count)
+table(counts$count)
+freqtab <- as_tibble_row(table(counts$count))
+freqtab2 <- freqtab %>% pivot_longer(cols = everything(), names_to = "bcsperbin", values_to = "numbins")
+counts2 <- counts %>% separate_wider_delim(bin, ",", names=c("bin1", "bin2"))
+counts2$bin1 <- gsub("[(]", "", counts2$bin1)
+counts3 <- counts2 %>% mutate(bin1 = as.integer(bin1))
+counts4 <- counts3 %>% arrange(bin1)
+
+ggplot(counts4, aes(bin1, count)) +
+  geom_col() +
+  ylab("BCs/Bin") +
+  xlab("bins") +
+  ggtitle("BC/Bin distribution")
+```
+
+```{r}
+maptgap <- bin100 %>% dplyr::filter(mean >= 45770900 ) %>% dplyr::filter(mean <= 46099600) %>% droplevels()
+summary(maptgap)
+counts2 <- as_tibble(table(maptgap$bin), .name_repair = unique)
+names(counts2)[1] <- "bin"
+names(counts2)[2] <- "count"
+counts3 <- counts2 %>% filter(count != 0)
+```
+
+```{r}
+counts4nozero <- counts4 %>% dplyr::filter(count != 0)
+
+options(scipen=999)
+binstartnew = counts4nozero$bin1
+binendnew = binstartnew + 100
+#format(binsend, scientific=F)
+#format(bins, scientific=F)
+chr = "chr17"
+binstring = toString(binstartnew)
+#label = str_c("bin", binstring, sep ="")
+label = binstartnew
+designbed = tibble(chr, binstartnew, binendnew, label)
+designbed$label <- sub("^", "bin", designbed$label)
+designbed
+
+write.table(designbed, "100bindesignfile5.bed", sep="\t", row.names=FALSE, col.names = FALSE, quote=FALSE)
+```
+
