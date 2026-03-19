@@ -1,0 +1,131 @@
+---
+title: "Untitled"
+author: "Becky"
+date: "2025-07-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(motifbreakR)
+
+```
+
+```{r}
+myvars <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/variant_reference_key.tsv")
+myvars <- myvars %>% filter(!grepl("deletion", id))
+myvars <- myvars %>% dplyr::select(id)
+
+myvars <- myvars %>% mutate(id=trimws(id)) %>%
+  tidyr::extract(col = id,
+    into = c("chr", "pos", "ref", "alt"),
+    regex = ".*_(chr[0-9XYM]+)_([0-9]+)_altseq[0-9]*_([^_]+)_to_([^_]+)",
+    remove = FALSE
+  )
+
+myvars <- myvars %>%
+  mutate(newid = paste(chr, pos, ref, alt, sep = ":"))
+
+#getting rid of indels for now
+myvars <- myvars %>% filter(!grepl("delete", id))
+myvars <- myvars %>% filter(!grepl("insert", id))
+
+myvars$pos <- as.numeric(myvars$pos)
+myvars$end <- myvars$pos + 1
+myvars$score <- 0
+myvars$strand <- "+"
+myvars$start <- myvars$pos -1
+
+myvars <- myvars %>% dplyr::select(chr, start, pos, newid, score, strand)
+
+write_tsv(myvars, "/cluster/home/rhauser/files/rmhex03/design/motifbreakersetupsnps.bed", col_names =FALSE)
+
+breakersnps <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/motifbreakersetupsnps.tsv", col_names = FALSE)
+
+library(motifbreakR)
+library(MotifDb)
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+pfmList <- query(MotifDb, 'hsapiens')
+
+snps.mb.frombed <- snps.from.file(file = "/cluster/home/rhauser/files/rmhex03/design/motifbreakersetupsnps.bed",
+                                  search.genome = BSgenome.Hsapiens.UCSC.hg38,
+                                  format = "bed", check.unnamed.for.rsid = F)
+
+TMP<-subset(MotifDb,  dataSource %in% c("jaspar2022"))
+TMP<-subset(TMP, organism %in% "Hsapiens")
+#test<-sapply(strsplit(names(TMP),"-"),`[`,3)
+
+
+results <- motifbreakR(snpList = snps.mb.frombed, filterp = T,
+                       pwmList = TMP,
+                       threshold = 1e-4,
+                       method = "ic",
+                       bkg = c(A=0.25, C=0.25, G=0.25, T=0.25),
+                       BPPARAM = BiocParallel::SerialParam())
+```
+
+```{r}
+myvars <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/variant_reference_key.tsv")
+delete <- myvars %>% filter(grepl("delete", id))
+delete <- delete %>% dplyr::select(id)
+insert <- myvars %>% filter(grepl("insert", id))
+insert <- insert %>% dplyr::select(id)
+#indel <- rbind(insert, delete)
+
+insert <- insert %>% mutate(id=trimws(id)) %>%
+  tidyr::extract(col = id,
+    into = c("chr", "pos", "ref", "alt"),
+    regex = ".*_(chr[0-9XYM]+)_([0-9]+)_altseq[0-9]*_([^_]+)_to_([^_]+)",
+    remove = FALSE
+  )
+
+insert <- insert %>%
+  mutate(newid = paste(chr, pos, ref, alt, sep = ":"))
+
+delete <- delete %>% mutate(id=trimws(id)) %>%
+  tidyr::extract(col = id,
+    into = c("chr", "pos", "ref", "alt"),
+    regex = ".*_(chr[0-9XYM]+)_([0-9]+)_altseq[0-9]*_([^_]+)_to_([^_]+)",
+    remove = FALSE
+  )
+
+delete <- delete %>%
+  mutate(newid = paste(chr, pos, ref, alt, sep = ":"))
+
+
+insert$pos <- as.numeric(insert$pos)
+insert$end <- insert$pos + 1
+insert$score <- 0
+insert$strand <- "+"
+insert$start <- insert$pos -1
+
+myvars <- myvars %>% dplyr::select(chr, start, pos, newid, score, strand)
+
+write_tsv(myvars, "/cluster/home/rhauser/files/rmhex03/design/motifbreakersetupsnps.bed", col_names =FALSE)
+
+breakersnps <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/motifbreakersetupsnps.tsv", col_names = FALSE)
+
+library(motifbreakR)
+library(MotifDb)
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+pfmList <- query(MotifDb, 'hsapiens')
+
+snps.mb.frombed <- snps.from.file(file = "/cluster/home/rhauser/files/rmhex03/design/motifbreakersetupsnps.bed",
+                                  search.genome = BSgenome.Hsapiens.UCSC.hg38,
+                                  format = "bed", check.unnamed.for.rsid = F)
+
+TMP<-subset(MotifDb,  dataSource %in% c("jaspar2022"))
+TMP<-subset(TMP, organism %in% "Hsapiens")
+#test<-sapply(strsplit(names(TMP),"-"),`[`,3)
+
+
+results <- motifbreakR(snpList = snps.mb.frombed, filterp = T,
+                       pwmList = TMP,
+                       threshold = 1e-4,
+                       method = "ic",
+                       bkg = c(A=0.25, C=0.25, G=0.25, T=0.25),
+                       BPPARAM = BiocParallel::SerialParam())
+
+```
