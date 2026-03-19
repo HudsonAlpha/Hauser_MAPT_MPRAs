@@ -1,0 +1,171 @@
+---
+title: "RNAseqCRISPRi"
+author: "Becky"
+date: "2025-01-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{bash}
+conda activate seq_r_env
+```
+
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(rtracklayer)
+library(edgeR)
+library(ggplot2)
+library(ggrepel)
+library(Seurat)
+
+```
+
+```{r}
+
+files=as.list(readLines("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/path_to_counts.txt"))
+n=sapply(strsplit(unlist(files),"[/]"),"[[",10)
+
+
+counts<-lapply(files, function(x){
+  tab<-read.table(x,header=F)
+})
+names(counts)<-n
+
+for(i in 1:length(counts)){
+  colnames(counts[[i]])<-c("gene_id", names(counts)[i])
+}
+
+COUNTS<-do.call(cbind, counts)
+rownames(COUNTS)<-COUNTS[,1]
+COUNTS<-COUNTS[,!(grepl("gene_id", colnames(COUNTS)))]
+colnames(COUNTS)<-sapply(strsplit(colnames(COUNTS),".", fixed=T),`[`,2)
+COUNTS<-as.data.frame(COUNTS)
+
+
+gtf<-import("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/gencode.v47.annotation.gtf")
+gtf<-gtf[which(gtf$type=="gene"),]
+key<-mcols(gtf)[,c(5,7)]
+
+
+COUNTS$gene_id<-rownames(COUNTS)
+COUNTS.m<-merge(COUNTS, key, by="gene_id")
+rownames(COUNTS.m)<-COUNTS.m$gene_name
+write.csv(COUNTS.m, "/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_counts.csv", quote=F)
+
+
+
+COUNTS.m<-COUNTS.m[,-c(1,90)]
+
+
+CPM<-cpm(COUNTS.m)
+write.csv(CPM, "/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_CPM.csv", quote=F)
+cpm2<-CPM[rowMeans(CPM)>1,]
+write.csv(cpm2, "/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_CPM_1cutoff.csv", quote=F)
+
+
+```
+
+#cell type correction
+```{r}
+
+files=as.list(readLines("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/path_to_counts.txt"))
+n=sapply(strsplit(unlist(files),"[/]"),"[[",10)
+
+
+counts<-lapply(files, function(x){
+  tab<-read.table(x,header=F)
+})
+names(counts)<-n
+
+for(i in 1:length(counts)){
+  colnames(counts[[i]])<-c("gene_id", names(counts)[i])
+}
+
+COUNTS<-do.call(cbind, counts)
+rownames(COUNTS)<-COUNTS[,1]
+COUNTS<-COUNTS[,!(grepl("gene_id", colnames(COUNTS)))]
+colnames(COUNTS)<-sapply(strsplit(colnames(COUNTS),".", fixed=T),`[`,2)
+COUNTS<-as.data.frame(COUNTS)
+
+
+gtf<-import("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/gencode.v47.annotation.gtf")
+gtf<-gtf[which(gtf$type=="gene"),]
+key<-mcols(gtf)[,c(5,7)]
+
+
+COUNTS$gene_id<-rownames(COUNTS)
+COUNTS.m<-merge(COUNTS, key, by="gene_id")
+rownames(COUNTS.m)<-COUNTS.m$gene_name
+#write.csv(COUNTS.m, "/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_counts.csv", quote=F)
+
+#ss<-read.csv("/cluster/projects/MAPT/MAPT_ieKO/Samplesheet.csv")
+#ss$Mouse<-paste0("mc",ss$Mouse)
+#ss2<-ss[which(ss$Mouse %in% colnames(COUNTS.m)),]
+
+COUNTS.m<-COUNTS.m[,-c(1,90)]
+
+
+CPM<-cpm(COUNTS.m)
+#write.csv(CPM, "/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_CPM.csv", quote=F)
+cpm2<-CPM[rowMeans(CPM)>1,]
+#write.csv(cpm2, "/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_CPM_1cutoff.csv", quote=F)
+
+samples <- read_csv("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/samples.csv")
+samples <- samples %>%
+  mutate(group = str_extract(Sample, "^[^_]+"))
+
+pca<-prcomp(t(cpm2), scale=T)
+pca_df<-as.data.frame(pca$x[,1:2])
+pca_df$sample<-colnames(COUNTS.m)
+pca_df$group <- sub("_.*", "", pca_df$sample)
+
+
+rs <- rowSums(as.matrix(COUNTS.m))
+ra <- as.matrix(rowMeans(CPM))
+
+#pseudo cell type score
+counts<-read.csv("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/RNA_counts.csv", row.names=1)
+#ss<-read.csv("/cluster/home/rhauser/files/rmhex02/CRISPRi/RNAseq/samples.csv")
+
+CPMfilt <- COUNTS.m[ra[,1]>1,]
+
+counts<-counts[,samples$Sample]
+filtered_counts <- counts[rownames(counts) %in% rownames(ra), ]
+
+
+obj<-CreateSeuratObject(counts)
+obj<-NormalizeData(obj)
+
+obj<-AddModuleScore(obj, features=list(c("ALDH1L1", "SLC1A3", "SLC1A2", "S100B")), name="Astrocyte_score_noCST3wALDH1L1_SLC1A3_SLC1A2_S100B")
+obj<-AddModuleScore(obj, features=list(c("SYP", "RBFOX3")), name="Mature_score_alt")
+obj <- AddModuleScore(obj, features=list(c("NES", "PAX6")), name="Stem_score")
+
+
+samples$Astrocyte_score_noCST3wALDH1L1_SLC1A3_SLC1A2_S100B <- obj$Astrocyte_score_noCST3wALDH1L1_SLC1A3_SLC1A2_S100B1
+samples$Mature_score_alt <- obj$Mature_score_alt1
+samples$Stem_score <- obj$Stem_score1
+
+
+
+dds <- DESeqDataSetFromMatrix(countData=COUNTS.m[ra[,1]>1,], colData = samples, design =~group+Mature_score_alt+Astrocyte_score_noCST3wALDH1L1_SLC1A3_SLC1A2_S100B+Stem_score)
+dds<-DESeq(dds)
+
+tab <- table(samples[which(samples$group != "safe"),]$group)
+RES <-  list()
+for( i in names(tab)){
+  res<- results(dds, contrast=c("group",i,"safe"))
+  res$gene<-rownames(res)
+  res$gRNA<-i
+  RES[i]<-res
+}
+
+for (name in names(RES)) {
+  file_name <- paste0(name, "deseq2MatureAstrocyteImmatureScoreCPM1_ALDH1L1_SLC1A2_SLC1A3_S100BAst_SYP_RBFOX3_Mat_NES_PAX6Imm.csv") # Create file name based on the list element name
+  write.csv(RES[[name]], file_name, quote=F) # Save the object to CSV
+}
+
+```
