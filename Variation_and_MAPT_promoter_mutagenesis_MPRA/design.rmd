@@ -1,0 +1,1216 @@
+---
+title: "variationmpra3"
+author: "Becky"
+date: "2024-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(readxl)
+library(BSgenome)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(Biostrings)
+library(TFBSTools)
+library(JASPAR2022)
+```
+
+#mapt mutagenesis
+```{r}
+#MAPT promoter saturation mutagenesis script
+
+#########
+#########
+#EDIT THE START POSITIONS AND REGION LENGTH
+#########
+#########
+
+# Define the chromosome, start and end positions
+chr <- "chr17"
+start_positions <- 45893536:45895535
+region_length <- 219
+half_region <- (region_length - 1) / 2
+
+# Create the tibble with chromosome and positions
+maptmut <- tibble(
+  chr = chr,
+  POS = start_positions)
+
+genome=BSgenome.Hsapiens.UCSC.hg38
+
+#get reference seqs with position in middle
+maptmut <- maptmut %>% mutate(referenceseq = map2_chr(chr, POS, ~{
+  #calculated the start and end of the region. .y refers to POS, .x is CHROM
+  start_pos <- .y - (region_length %/% 2)
+  end_pos <- .y + (region_length %/% 2)
+  #extract sequence of region
+  as.character(getSeq(genome, .x, start = start_pos, end = end_pos))
+}))
+
+# Add the REF column with the Reference base (center of reference seq)
+maptmut <- maptmut %>%
+  mutate(REF = substr(referenceseq, half_region + 1, half_region + 1))
+
+#defining the bases are
+bases <- c("A", "T", "G", "C")
+
+#check what base is in REF, create columns called ALT1, ALT2, and ALT3 with the other bases
+maptmut <- maptmut %>% mutate(
+  ALT1 = sapply(1:n(), function(i) {
+    setdiff(bases, c(REF[i]))[1]
+  }),
+  ALT2 = sapply(1:n(), function(i) {
+    setdiff(bases, c(REF[i], ALT1[i]))[1]
+  }),
+  ALT3 = sapply(1:n(), function(i){
+    setdiff(bases, c(REF[i], ALT1[i], ALT2[i]))[1]
+  })
+)
+
+#get alternate sequences
+#and deletion of 5bp
+errormessage <- "error"
+middlepos <- half_region
+
+maptmut <- maptmut %>% mutate(
+  altseq1 = map2_chr(referenceseq, ALT1, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  }),
+  
+  altseq2 = map2_chr(referenceseq, ALT2, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  }),
+  
+  altseq3 = map2_chr(referenceseq, ALT3, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  }),
+  
+  deletion = map_chr(referenceseq, ~ {
+    refseq <- .x
+    if (nchar(refseq) >= middlepos) {
+      #define start and end positions for deletion
+      start_del <- middlepos - 1
+      end_del <- middlepos + 3
+      paste0(
+        substr(refseq, 1, start_del -1),
+        substr(refseq, end_del + 1, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  })
+)
+
+#write.table(maptmut, file="maptmut.tsv", sep="\t", col.names = TRUE, row.names =FALSE, quote = FALSE)
+
+#get scrambled sequences of 100 random references
+# Function to scramble sequence with a maximum of 4 repeated characters
+#scramble_sequence <- function(seq) {
+#  repeat {
+#    scrambled <- str_split(seq, "")[[1]] %>% sample() %>% paste(collapse = "")
+#    if (!str_detect(scrambled, "(.)\\1{4,}")) {
+#      return(scrambled)
+#    }
+#  }
+#}
+
+#set.seed(123)  # For reproducibility
+
+# Scramble 100 random rows in the maptmut tibble, leaving others blank in `scrambled` column
+#maptmut <- maptmut %>%
+#  mutate(
+#    scrambled = ifelse(row_number() %in% sample(n(), 100),
+#                       sapply(referenceseq, scramble_sequence),
+#                       "")
+#  )
+
+#####
+#Check scrambled seqs for TF binding sites
+#####
+# Load transcription factor PWMs from JASPAR
+#opts <- list(species = 9606)  # 9606 is the species code for human
+#pfm_list <- getMatrixSet(JASPAR2022, opts)
+
+# Convert each PFM to a PWMatrix
+#pwm_list <- lapply(pfm_list, toPWM)
+
+# Function to scan a sequence for TF binding sites across all PWMs in pwm_list
+#contains_tfbs <- function(seq) {
+ # if (seq == "") return(FALSE)  # Skip empty (non-scrambled) rows
+  
+  # Convert sequence to DNAString
+  #dna_seq <- DNAString(seq)
+  
+  # Iterate over each PWM and check for binding sites
+  #for (pwm in pwm_list) {
+    #hits <- searchSeq(pwm, dna_seq, min.score = "100%")
+    #if (length(hits) > 0) {
+    #  return(TRUE)
+   # }
+  #}
+  
+ # return(FALSE)  # Return FALSE if no binding sites are found across all PWMs
+#}
+
+# Apply the function to each scrambled sequence
+#maptmut <- maptmut %>%
+#  mutate(tfbs_found = sapply(scrambled, contains_tfbs))
+
+# View rows where TF binding sites were found
+#maptmut_with_tfbs <- maptmut %>% filter(tfbs_found == TRUE)
+#maptmut_with_tfbs
+
+
+
+
+
+#add adapters to sequences for MPRA
+fadapter <- tolower("AGGACCGGATCAACT")
+radapter <- tolower("CATTGCGTGAACCGA")
+
+maptmut2 <- maptmut %>%
+  mutate(
+    referenceseq = paste0(fadapter, referenceseq, radapter),
+    altseq1 = paste0(fadapter, altseq1, radapter),
+    altseq2 = paste0(fadapter, altseq2, radapter),
+    altseq3 = paste0(fadapter, altseq3, radapter),
+    deletion = paste0(fadapter, deletion, radapter)
+  )
+
+#setup for fasta file
+#get sequences on individual rows, create names in format "maptprom_chr17_45894157_altseq1_G_to_A"
+maptmut3 <- maptmut2 %>%
+  pivot_longer(
+    cols = c(referenceseq, altseq1, altseq2, altseq3, deletion),
+    names_to = "sequence_type",
+    values_to = "sequence"
+  ) %>%
+  mutate(ID = case_when(
+    sequence_type %in% c("referenceseq", "deletion") ~ paste("maptprom", chr, POS, sequence_type, sep = "_"),
+    sequence_type == "altseq1" ~ paste("maptprom", chr, POS, sequence_type, REF, "to", ALT1, sep = "_"),
+    sequence_type == "altseq2" ~ paste("maptprom", chr, POS, sequence_type, REF, "to", ALT2, sep = "_"),
+    sequence_type == "altseq3" ~ paste("maptprom", chr, POS, sequence_type, REF, "to", ALT3, sep = "_"),
+    TRUE ~ NA_character_  # Handle any unexpected cases
+  ))
+
+#maptmut3
+#write.table(maptmut3, file="maptmut3.tsv", sep="\t", col.names = TRUE, row.names =FALSE, quote = FALSE)
+
+#save as fastafile setup
+fasta_sequences <- DNAStringSet(maptmut3$sequence)
+names(fasta_sequences) <- maptmut3$ID
+
+# Write to a FASTA file
+writeXStringSet(fasta_sequences, "maptmutagenesis.fasta", width = 1000)
+
+```
+
+#import files
+```{r}
+#get Bri CRISPR pos regions, not including regions 0 or 300 because they're included in the mapt promoter region above
+bricrisprpos_noprom <- tibble(
+  chr="chr17",
+  start=c(45219248, 45241086, 45309310, 45428887, 45431544, 45848403, 45873588, 45940785, 45942182, 45971524),
+  end=c(45219836, 45242238, 45309777, 45429757, 45432556, 45849786, 45874056, 45941252, 45942650, 45971991),
+  name=c(-674458, -652338, -584456, -464677, -461949, -44905, -20178, 47019, 48416, 77758)
+)
+bricrisprpos_noprom$size <- bricrisprpos_noprom$end - bricrisprpos_noprom$start
+bricrisprpos_noprom$start <- as.numeric(bricrisprpos_noprom$start)
+bricrisprpos_noprom$end <- as.numeric(bricrisprpos_noprom$end)
+
+#expand crispr regions by 100bp on either side
+bricrisprpos_noprom$start <- bricrisprpos_noprom$start - 100
+bricrisprpos_noprom$end <- bricrisprpos_noprom$end + 100
+bricrisprpos_noprom$size <- bricrisprpos_noprom$end - bricrisprpos_noprom$start
+
+gr_bricrisprpos <- GRanges(bricrisprpos_noprom)
+
+#get oligompra hits
+oligo <- read_tsv("testEmpirical_alpha_Neurons_results_labeled_prefilt_allcontrols_oneside.tsv")
+#remove scrambled sequences
+oligo <- oligo %>% filter(!str_detect(label, "scram"))
+#split up label column into usable chr, start, end info
+oligo <- oligo %>% separate(label, into = c("prefix", "chr", "pos"), sep = "::") 
+oligo <- oligo %>% separate(chr, into = c("chr", "start"), sep = ":")
+oligo <- oligo %>% separate(start, into = c("start", "end"), sep = "-")
+oligo <- oligo %>% mutate(end = str_remove(end, "\\+$"))
+#filter for just chr17 hits
+rmhex02_chr17 <- oligo %>% filter(chr == "chr17")
+#filter for just chr17 hits, mapt gap
+rmhex02_chr17_mapt <- rmhex02_chr17 %>% filter(grepl("mapt", prefix)) %>% arrange(desc(start))
+rmhex02_chr17_mapt$start <- as.numeric(rmhex02_chr17_mapt$start)
+rmhex02_chr17_mapt$end <- as.numeric(rmhex02_chr17_mapt$end)
+#filter for just chr17 hits, luciferase pos regions
+rmhex02_chr17_luc <- rmhex02_chr17 %>% filter(grepl("bri", prefix)) %>% arrange(desc(start))
+rmhex02_chr17_luc$start <- as.numeric(rmhex02_chr17_luc$start)
+rmhex02_chr17_luc$end <- as.numeric(rmhex02_chr17_luc$end)
+#filter for just chr17 hits, grn gap
+rmhex02_chr17_grn <- rmhex02_chr17 %>% filter(grepl("grn", prefix)) %>% arrange(desc(start))
+rmhex02_chr17_grn$start <- as.numeric(rmhex02_chr17_grn$start)
+rmhex02_chr17_grn$end <- as.numeric(rmhex02_chr17_grn$end)
+
+mapt_hits <- rmhex02_chr17_mapt %>% filter(pval.mad <= 0.05)
+
+#filtering the hits around mapt for the top 25%, 20%, and pval les than 0005
+threshold25 <- quantile(mapt_hits$pval.mad, 0.25, na.rm =TRUE)
+lowest25 <- mapt_hits %>% filter(pval.mad <= threshold25)
+
+
+#convert my oligo mpra hit regions to granges and merge overlaps
+gr_mapt_25 <- GRanges(
+  seqnames = lowest25$chr,
+  ranges = IRanges(start = lowest25$start,
+                   end = lowest25$end),
+  names = lowest25$prefix
+)
+
+#merge overlaps
+gr_mapt_25sort <- sort(gr_mapt_25)
+gr_mapt_25reduce <- GenomicRanges::reduce(gr_mapt_25sort)
+
+#get my CRISPR regions, not included in maptgap oligompra, from BACMPRA
+#regions 16 and 3 not included because they fell out of significance with 3 reps, even though they could still be real
+#for region 1, it's at the edge of the oligompra and the bac mpra. i picked the hit starting at 44904681, p val of 0.001 to where this peak about ends in the bac mpra 44905899 (even though not sig in bac mpra)
+#only regions 1, 2, 11, 14 were tested in the CRISPRi experiment, 17 we didn't get cloned but included in case we had to repeat with degron system
+beckycrispr <- tibble(chr="chr17",
+                      start=as.numeric(c(44904681, 45371700, 45650300, 45655100, 45644600)),
+                      end=as.numeric(c(44905899, 45371999, 45650699, 45655599, 45644999)),
+                      name=c("region1", "region2", "region11", "region14", "region17"))
+gr_beckycrispr <- GRanges(beckycrispr)
+
+#get encode v4 cCres
+#encodecres <- read_tsv("ENCFF420VPZ.bed", col_names = c("chr", "start", "end", "name", "score", "strand", "thickStart", "thickEnd", "RGB", "creType"))
+
+#combine and merge overlaps of mpra regions
+allMPRAregions <- c(gr_beckycrispr, gr_mapt_25reduce, gr_bricrisprpos)
+allMPRAregions_sort <- sort(allMPRAregions)
+allMPRAregions_reduce <- GenomicRanges::reduce(allMPRAregions_sort)
+
+```
+
+#get variants
+```{r}
+#getting snps and indels from ADSP
+variants <- read_tsv("justtheimportantinfo_norm_variants25.tsv", col_names=c("chr", "POS", "REF", "ALT", "ID", "AF", "AC"))
+
+#filter out any variants that have and allele count of 0
+variants2 <- variants %>% filter(AC != 0)
+
+#remove promoter associated variants
+variants_noprom <- variants2 %>%
+  filter(!(POS >= 45893536 & POS <= 45895535))
+#turn into granges
+gr_variants_noprom <- GRanges(
+  seqnames = variants_noprom$chr,
+  IRanges(start = variants_noprom$POS,
+          end = variants_noprom$POS),
+  name = variants_noprom$ID
+)
+
+  
+#only get variants that overlap my mpra regions
+overlapregions <- gr_variants_noprom[gr_variants_noprom %over% allMPRAregions_reduce]
+overlapregions_tib <- as_tibble(overlapregions)
+
+#rtracklayer::export(overlapregions, con="Regions25_new.bed", format = "BED")
+
+# Filter for rows in variants where POS matches start in overlapregions_tib
+filtered_variants <- variants2 %>%
+  filter(POS %in% overlapregions_tib$start)
+
+# Create filtered_snps where REF and ALT strings are of length 1
+filtered_snps <- variants2 %>%
+  filter(nchar(REF) == 1)
+filtered_snps <- filtered_snps %>%
+  filter(nchar(ALT) == 1)
+
+# Create filtered_indels with all other rows
+filtered_indels <- variants2 %>%
+  filter(!(nchar(REF) == 1 & nchar(ALT) == 1))
+
+#remove indels with more than 10 insertions or deletions
+smallindels <- filtered_indels %>% filter(nchar(REF) <= 11)
+smallindels <- smallindels %>% filter(nchar(ALT) <= 11)
+
+#make sure Allele freq is a numeric for all variant tibbles
+smallindels$AF <- as.numeric(smallindels$AF)
+filtered_snps$AF <- as.numeric(filtered_snps$AF)
+
+commonindels_count <- smallindels %>% filter(AF >= 0.01) %>% nrow()
+commonsnps_count <- filtered_snps %>% filter(AF >= 0.01) %>% nrow()
+
+#duplicate common variants (rows with AF of 0.01 or more)
+smallindels_commondup <- smallindels %>%
+  bind_rows(smallindels %>% filter(AF >= 0.01))
+filtered_snps_commondup <- filtered_snps %>%
+  bind_rows(filtered_snps %>% filter(AF >= 0.01))
+
+
+unique_lengths_indels_ref <- smallindels_commondup %>%
+  mutate(string_length = nchar(REF)) %>%
+  distinct(string_length) %>%
+  pull(string_length)
+
+unique_lengths_indels_alt <- smallindels_commondup %>%
+  mutate(string_length = nchar(ALT)) %>%
+  distinct(string_length) %>%
+  pull(string_length)
+```
+
+#SNVs
+```{r}
+#getting snvs
+#getting reference of snvs
+snvs <- filtered_snps_commondup %>% mutate(referenceseq = map2_chr(chr, POS, ~{
+  #calculated the start and end of the region. .y refers to POS, .x is CHROM
+  start_pos <- .y - (region_length %/% 2)
+  end_pos <- .y + (region_length %/% 2)
+  #extract sequence of region
+  as.character(getSeq(genome, .x, start = start_pos, end = end_pos))
+}))
+
+#checking to make sure the reference base is at the middle of the string
+middlepos <- ceiling(region_length/2)
+snvs <- snvs %>% mutate(refcheck = map2_lgl(referenceseq, REF, ~ {
+  referenceseq <- .x
+  ref_char <- .y
+  #ensure seq is at long enough for it to have the middle position
+  if(nchar(referenceseq) >= middlepos) {
+    return(substr(referenceseq, middlepos, middlepos) == ref_char)
+  } else {
+    return(FALSE) #return false if seq is too short
+  }
+}))
+
+errormessage = "error"
+
+#get alt seq
+snvs <- snvs %>% 
+  mutate(altseq = map2_chr(referenceseq, ALT, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  }))
+
+#add adapters
+snvs2 <- snvs %>%
+  mutate(
+    referenceseq = paste0(fadapter, referenceseq, radapter),
+    altseq = paste0(fadapter, altseq, radapter)
+  )
+
+
+snvs2 <- snvs2 %>%
+  pivot_longer(
+    cols = c(referenceseq, altseq),
+    names_to = "sequence_type",
+    values_to = "sequence"
+  ) %>%
+  mutate(ID = case_when(
+    sequence_type == "referenceseq" ~ paste("SNV", chr, POS, sequence_type, sep = "_"),
+    sequence_type == "altseq" ~ paste("SNV", chr, POS, sequence_type, REF, "to", ALT, sep = "_"),
+    TRUE ~ NA_character_  # Handle any unexpected cases
+  ))
+
+
+#save as fastafile setup
+fasta_sequences3 <- DNAStringSet(snvs2$sequence)
+names(fasta_sequences3) <- snvs2$ID
+
+# Write to a FASTA file
+writeXStringSet(fasta_sequences3, "snvs.fasta", width = 1000)
+
+
+
+```
+
+#indels
+```{r}
+region_length <- 219
+
+process_insert <- function(insert_tibble, region_length) {
+  insert_tibble %>%
+    rowwise() %>%
+    mutate(
+      # Adjust region length based on the ALT string length
+      adj_length = region_length - (nchar(ALT) - 1),
+      
+      # Calculate start and end positions to ensure POS is centered at the 9th character in an 18bp sequence
+      start = POS - (adj_length %/% 2) + 1,
+      end = start + (adj_length - 1),
+      
+      # Retrieve the reference sequence
+      referenceseq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, chr, start = start, end = end)),
+      
+      # Determine the position of POS within referenceseq
+      pos_in_referenceseq = (adj_length %/% 2),
+      
+      # Construct altseq by dynamically inserting ALT after POS position
+      altseq = str_c(
+        str_sub(referenceseq, 1, pos_in_referenceseq),               # First part up to POS position
+        str_sub(ALT, 2),                                             # ALT string without the first character
+        str_sub(referenceseq, pos_in_referenceseq + 1, nchar(referenceseq)) # Remaining part after POS
+      )
+    ) %>%
+    ungroup() %>%
+    select(-adj_length, -start, -end, -pos_in_referenceseq)
+}
+
+process_insert_even <- function(insert_tibble, region_length) {
+  insert_tibble %>%
+    rowwise() %>%
+    mutate(
+      # Adjust region length based on the ALT string length
+      adj_length = region_length - (nchar(ALT)),
+      
+      # Calculate start and end positions to ensure POS is centered at the 9th character in an 18bp sequence
+      start = POS - (adj_length %/% 2) + 1,
+      end = start + (adj_length - 1),
+      
+      # Retrieve the reference sequence
+      referenceseq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, chr, start = start, end = end)),
+      
+      # Determine the position of POS within referenceseq
+      pos_in_referenceseq = (adj_length %/% 2),
+      
+      # Construct altseq by dynamically inserting ALT after POS position
+      altseq = str_c(
+        str_sub(referenceseq, 1, pos_in_referenceseq),               # First part up to POS position
+        str_sub(ALT, 2),                                             # ALT string without the first character
+        str_sub(referenceseq, pos_in_referenceseq + 1, nchar(referenceseq)) # Remaining part after POS
+      )
+    ) %>%
+    ungroup() %>%
+    select(-adj_length, -start, -end, -pos_in_referenceseq)
+}
+
+
+process_delete <- function(insert_tibble, region_length) {
+  insert_tibble %>%
+    rowwise() %>%
+    mutate(
+      # Calculate start and end positions to ensure POS is centered within the defined region_length
+      start = POS - (region_length %/% 2) + (nchar(REF) - 1),
+      end = start + (region_length - 1),
+      
+      # Retrieve the reference sequence with the desired region_length
+      referenceseq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, chr, start = start, end = end)),
+      
+      # Find the position of POS in referenceseq, aligned with the first character of REF
+      pos_in_referenceseq = POS - start + 1,  # Position relative to start of region
+      
+      # Find the delete start and delete end positions for the part of REF to remove (excluding its first character)
+      delete_start = pos_in_referenceseq + 1,  # Starting just after the first character of REF
+      delete_end = delete_start + nchar(REF) - 2,  # Ending just before the last character of REF
+      
+      # Construct altseq by keeping the portion before POS and after the delete part of REF
+      altseq = str_c(
+        str_sub(referenceseq, 1, pos_in_referenceseq),    # Keep the part before POS
+        str_sub(referenceseq, delete_end + 1, nchar(referenceseq))  # Keep the part after deleting REF (excluding the first character)
+      )
+    ) %>%
+    ungroup() %>%
+    select(-start, -end, -pos_in_referenceseq, -delete_start, -delete_end)
+}
+
+process_delete_even <- function(insert_tibble, region_length) {
+  insert_tibble %>%
+    rowwise() %>%
+    mutate(
+      # Calculate start and end positions to ensure POS is centered within the defined region_length
+      start = POS - (((region_length - 1) %/% 2) - ((nchar(REF) - (((nchar(REF))-1)/2)))),
+      end = start + (region_length - 2),
+      
+      # Retrieve the reference sequence with the desired region_length
+      referenceseq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, chr, start = start, end = end)),
+      
+      # Find the position of POS in referenceseq, aligned with the first character of REF
+      pos_in_referenceseq = POS - start + 1,  # Position relative to start of region
+      
+      # Find the delete start and delete end positions for the part of REF to remove (excluding its first character)
+      delete_start = pos_in_referenceseq + 1,  # Starting just after the first character of REF
+      delete_end = delete_start + nchar(REF) - 2,  # Ending just before the last character of REF
+      
+      # Construct altseq by keeping the portion before POS and after the delete part of REF
+      altseq = str_c(
+        str_sub(referenceseq, 1, pos_in_referenceseq),    # Keep the part before POS
+        str_sub(referenceseq, delete_end + 1, nchar(referenceseq))  # Keep the part after deleting REF (excluding the first character)
+      )
+    ) %>%
+    ungroup() %>%
+    select(-start, -end, -pos_in_referenceseq, -delete_start, -delete_end)
+}
+
+notcrazyindels <- smallindels_commondup %>%
+  mutate(
+    # Set indel column: "insert" if REF length is 1, "delete" if greater than 1
+    indel = if_else(nchar(REF) == 1, "insert", "delete"),
+    
+    # Set length column based on conditions for both "insert" and "delete"
+    length = case_when(
+      indel == "insert" & (nchar(ALT) %% 2 == 1) ~ "even",  # ALT is odd, so set "even"
+      indel == "insert" & (nchar(ALT) %% 2 == 0) ~ "odd",   # ALT is even, so set "odd"
+      indel == "delete" & (nchar(REF) %% 2 == 1) ~ "even",  # REF is odd, so set "even"
+      indel == "delete" & (nchar(REF) %% 2 == 0) ~ "odd",   # REF is even, so set "odd"
+      TRUE ~ NA_character_  # Set to NA for rows without applicable conditions
+    )
+  )
+
+
+# Define a function that applies the appropriate processing function based on conditions
+apply_indel_processing <- function(indels1, region_length) {
+  indels1 %>%
+    group_by(indel, length) %>%
+    group_modify(~ {
+      if (.y$indel == "insert" && .y$length == "odd") {
+        process_insert(.x, region_length)
+      } else if (.y$indel == "insert" && .y$length == "even") {
+        process_insert_even(.x, region_length)
+      } else if (.y$indel == "delete" && .y$length == "odd") {
+        process_delete(.x, region_length)
+      } else if (.y$indel == "delete" && .y$length == "even") {
+        process_delete_even(.x, region_length)
+      } else {
+        .x  # If no condition matches, return the unmodified group
+      }
+    }) %>%
+    ungroup()
+}
+
+notcrazyindels <- apply_indel_processing(notcrazyindels, region_length)
+unique_lengths_ref <- notcrazyindels %>%
+  mutate(string_length = nchar(referenceseq)) %>%
+  distinct(string_length) %>%
+  pull(string_length)
+
+
+write_csv(notcrazyindels, "indeltest219_2.csv")
+
+#add adapters
+notcrazyindels <- notcrazyindels %>%
+  mutate(
+    referenceseq = paste0(fadapter, referenceseq, radapter),
+    altseq = paste0(fadapter, altseq, radapter)
+  )
+
+#check lengths
+unique_lengths_ref <- notcrazyindels %>%
+  mutate(string_length = nchar(referenceseq)) %>%
+  distinct(string_length) %>%
+  pull(string_length)
+unique_lengths_alt <- notcrazyindels %>%
+  mutate(string_length = nchar(altseq)) %>%
+  distinct(string_length) %>%
+  pull(string_length)
+unique_lengths <- notcrazyindels %>%
+  mutate(string_length_ref = nchar(altseq)) %>%
+  mutate(string_length_alt = nchar(altseq)) %>%
+  mutate(ncharALT = nchar(ALT)) %>%
+  mutate(ncharREF = nchar(REF))
+
+#write_tsv(unique_lengths, "uniquelengths.tsv")
+
+#  pull(string_length)
+
+notcrazyindels2 <- notcrazyindels %>%
+  pivot_longer(
+    cols = c(referenceseq, altseq),
+    names_to = "sequence_type",
+    values_to = "sequence"
+  ) %>%
+  mutate(ID = case_when(
+    sequence_type == "referenceseq" ~ paste(indel, chr, POS, sequence_type, sep = "_"),
+    sequence_type == "altseq" ~ paste(indel, chr, POS, sequence_type, REF, "to", ALT, sep = "_"),
+    TRUE ~ NA_character_  # Handle any unexpected cases
+  ))
+
+write_tsv(notcrazyindels2, "indelstest.tsv")
+
+#save as fastafile setup
+fasta_sequences2 <- DNAStringSet(notcrazyindels2$sequence)
+names(fasta_sequences2) <- notcrazyindels2$ID
+
+# Write to a FASTA file
+writeXStringSet(fasta_sequences2, "indels.fasta", width = 1000)
+
+
+
+```
+
+#negative controls from bri
+```{r}
+#getting extra controls from bri
+#negative controls in HEK, NPC(ipsc?), Neurons
+brineg <- read_csv("CtrlSeqsWithoutActivity.csv")
+
+#remove homology for now
+brineg <- brineg %>%
+  mutate(sequence = substr(sequence_wHomology, 16, nchar(sequence_wHomology) - 15))
+
+##quick length checks
+nchar(brineg$sequence)
+nchar(brineg$sequence_wHomology)
+
+#shorten to 219bp, remove 25 from frong 26 from end
+brineg <- brineg %>%
+  mutate(shortenseq = substr(sequence, 26, nchar(sequence) - 26))
+
+#quick length check
+nchar(brineg$shortenseq)
+
+#add homology back in
+brineg <- brineg %>%
+  mutate(
+    shortwithadapters = paste0(fadapter, shortenseq, radapter)
+  )
+
+#length check
+nchar(brineg$shortwithadapters)
+
+#add labels
+brineg <- brineg %>%
+  mutate(label = paste("briNegative", name, "219bp", sep = "_"))
+
+#save as fastafile setup
+brinegfasta_sequences <- DNAStringSet(brineg$shortwithadapters)
+names(brinegfasta_sequences) <- brineg$label
+
+# Write to a FASTA file
+writeXStringSet(brinegfasta_sequences, "brinegatives.fasta", width = 1000)
+```
+
+#positive controls from bri
+```{r}
+#getting extra positive controls from bri
+#regions positive in all cell types
+
+#tested regions positive in all cell types
+briposall <- read_csv("SignficantElementsSharedAcrossCellTypes.csv")
+
+#get bri's initial sequence
+briposall <- briposall %>%
+  separate(label, into = c("chr", "start"), sep = ":", convert = TRUE) %>%
+  mutate(start = as.numeric(start), # Ensure start is numeric
+         end = start + 269)
+
+briposall_gr <- GRanges(seqnames = briposall$chr,
+                        ranges = IRanges(start = briposall$start, end = briposall$end))
+briposall <- briposall %>%
+  mutate(seq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, briposall_gr)))
+#shorten to 219bp, remove 25 from front 26 from end
+briposall <- briposall %>%
+  mutate(shortenseq = substr(seq, 26, nchar(seq) - 26))
+briposall <- briposall %>%
+  mutate(shortseqwithadapters = paste0(fadapter, briposall$shortenseq, radapter))
+
+#make names
+briposall <- briposall %>%
+  mutate(label = paste("briPositive", chr, start, "219bp", sep = "_"))
+
+#save as fastafile setup
+briposfasta_sequences <- DNAStringSet(briposall$shortseqwithadapters)
+names(briposfasta_sequences) <- briposall$label
+
+# Write to a FASTA file
+writeXStringSet(briposfasta_sequences, "bripositives.fasta", width = 1000)
+```
+
+#promoters from bri
+```{r}
+#promoters from bri
+#promoters with a CPM >= 20
+briproms <- read_csv("MPRA_promoter_control.csv")
+#briproms <- briproms %>% filter(gene_name != "MAPT")
+briproms_gr <- GRanges(
+  seqnames = briproms$seqnames,
+  ranges = IRanges(start = briproms$start,
+                   end = briproms$end),
+  names = briproms$gene_name,
+  strand = briproms$strand
+)
+
+#filter encodecres for promoters
+#proms <- encodecres %>% filter(creType == "PLS")
+#proms <- GRanges(proms)
+#prom_overlaps <- subsetByOverlaps(briproms_gr, proms)
+
+#positive regions that overlap with promoters (3, chr11:125163947-125164216, chr2:164622069-164622338, chr7:5564815-5565084)
+#pos_overlaps <- briposall_gr[briposall_gr %over% briproms_gr]
+
+#promoters represented in positive regions (3, GRB14, ACTB, PKNOX2)
+#pos_overlaps2 <- briproms_gr[briproms_gr %over% briposall_gr]
+
+#bri's mpra
+crossspeciesmpra <- read_tsv("testEmpirical_alpha_Neuron_results_labeled.tsv")
+#crossspeciesmpra <- crossspeciesmpra %>% filter(label )
+crossspeciesmpra <- crossspeciesmpra %>% separate(label, into = c("chr", "start"), sep = ":") %>% na.omit()
+crossspeciesmpra$start <- as.numeric(crossspeciesmpra$start)
+crossspeciesmpra$end <- crossspeciesmpra$start + 269
+
+grcross <- GRanges(seqnames = crossspeciesmpra$chr,
+                   ranges = IRanges(start = crossspeciesmpra$start,
+                                    end = crossspeciesmpra$end),
+                   name = crossspeciesmpra$pval.mad)
+
+cross_prom_overlaps <- grcross[grcross %over% briproms_gr]
+cross_overlap <- as_tibble(cross_prom_overlaps)
+cross_overlap$neglog10pval <- (-log10(cross_overlap$name))
+cross_prombed <- cross_overlap %>% select(seqnames, start, end, neglog10pval)
+#write_tsv(cross_prombed, "briproms.bed", col_names = FALSE)
+
+
+#top MPRA regions from selected Bri Promoters (WNK2 included even though no positive hits in cross species mpra as a test,
+#CACNA1C excluded because I don't think that's the promoter for that gene,
+#MAPT excluded because it's already included in the mutagenesis)
+#CS in name is Cross species MPRA
+#I'm adding in SNCA from my oligo mpra
+#also have chromosome position and start position of previous mpras, total length of 270 for the oligos
+mypromoters <- tibble(
+  chr=c("chr2", "chr2", "chr2", "chr2", "chr5", "chr7", "chr11", "chr12", "chr17", "chr19", "chr4", "chr9"),
+  start=c(65129996, 164622429, 165204918, 165238842, 138610317, 5565085, 125163947, 78861993, 7219743, 48513860, 89837633, 93184266),
+  end=c(65130265, 164622698, 165205187, 165239111, 138610586, 5565354, 125164216, 78862262, 7220012, 48514129, 89837902, 93184535),
+  name=c("RAB1A_prom_CS_chr2:65129996", "GRB14_prom_CS_chr2:164622429", "SCN3A_prom_CS_chr2:165204918", "SCN2A_prom_CS_chr2:165238842", "CTNNA1_prom_CS_chr5:138610317", "ACTB_prom_CS_chr7:5565085", "PKNOX2_prom_CS_chr11:125163947", "SYT1_prom_CS_chr12:78861993", "DLG4_prom_CS_chr17:7219743", "LMTK3_prom_CS_chr19:48513860", "SNCA_prom_RMHex02_chr4:89837633", "WNK2_prom_RMHex02_chr9:93184266_p0.113inCS")
+)
+mypromoters$length <- mypromoters$end - mypromoters$start
+
+#double each promoter seq so it's over represented by 1X
+mypromotersdup <- mypromoters %>%
+  bind_rows(mypromoters)
+
+#get sequences
+gr_mypromotersdup <- GRanges(seqnames = mypromotersdup$chr,
+                             ranges = IRanges(start = mypromotersdup$start,
+                                              end = mypromotersdup$end),
+                             names = mypromotersdup$name)
+
+mypromotersdup <- mypromotersdup %>%
+  mutate(seq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, gr_mypromotersdup)))
+
+#shorten to 219bp, remove 25 from front 26 from end
+mypromotersdup <- mypromotersdup %>%
+  mutate(shortenseq = substr(seq, 26, nchar(seq) - 26))
+mypromotersdup <- mypromotersdup %>%
+  mutate(shortseqwithadapters = paste0(fadapter, mypromotersdup$shortenseq, radapter))
+
+#save as fastafile setup
+promfasta_sequences <- DNAStringSet(mypromotersdup$shortseqwithadapters)
+names(promfasta_sequences) <- mypromotersdup$name
+
+# Write to a FASTA file
+writeXStringSet(promfasta_sequences, "promoters.fasta", width = 1000)
+```
+
+#negative controls from oligo mpra
+```{r}
+#get negatives from my last mpra
+rmhex02_scram <- readDNAStringSet("finalrmhex02designfile_justscram.fa")
+rmhex02_scramtib <- tibble(
+  ID = names(rmhex02_scram),
+  seq = as.character(rmhex02_scram)
+)
+
+#remove adapters
+rmhex02_scramtib <- rmhex02_scramtib %>%
+   mutate(noadapters = str_sub(seq, start = 16, end = -16))
+#shorten to 219
+rmhex02_scramtib <- rmhex02_scramtib %>%
+    mutate(shortenseq = substr(noadapters, 26, nchar(noadapters) - 26))
+
+#get a few seqs where there was no change just around mapt
+notsig <- rmhex02_chr17_mapt %>% filter(pval.mad > 0.05)
+#set seed for reproducibility
+set.seed(123)
+#randomly select 100regions with no change
+notsig100 <- notsig %>%
+  slice_sample(n = 100)
+
+#get seqs
+notsig100_gr <- GRanges(seqnames = notsig100$chr,
+                        ranges = IRanges(start = notsig100$start, end = (notsig100$start + 269)),
+                        names = notsig100$prefix)
+notsig100 <- notsig100 %>%
+  mutate(seq = as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, notsig100_gr)))
+#shorten to 219bp, remove 25 from frong 26 from end
+notsig100 <- notsig100 %>%
+  mutate(shortenseq = substr(seq, 26, nchar(seq) - 26))
+
+##make names. start is original start positiion, before shortening
+notsig100 <- notsig100 %>%
+  mutate(name = paste("beckyNegative", chr, start, prefix, "219bp", sep = "_"))
+rmhex02_scramtib <- rmhex02_scramtib %>%
+  mutate(name = paste("beckyNegative", ID, "219bp", sep = "_"))
+
+notsig100_2 <- notsig100 %>% select(name, shortenseq)
+rmhex02_scramtib2 <- rmhex02_scramtib %>% select(name, shortenseq)
+
+#all negatives from oligo mpra
+oligompraneg <- bind_rows(notsig100_2, rmhex02_scramtib2)
+
+oligompraneg <- oligompraneg %>%
+  mutate(shortseqwithadapters = paste0(fadapter, oligompraneg$shortenseq, radapter))
+
+
+
+#save as fastafile setup
+oligonegfasta <- DNAStringSet(oligompraneg$shortseqwithadapters)
+names(oligonegfasta) <- oligompraneg$name
+
+# Write to a FASTA file
+writeXStringSet(oligonegfasta, "oligompra_negcontrols.fasta", width = 1000)
+
+```
+
+#negative controls, GC matched
+```{r}
+#getting scrambled negative controls set up
+#doing this after everything else, so I'm loading in fasta files from above
+#getting versions of seqs with no duplicates and no adapters, only references that are 219bp long
+
+#mutagenesis regions
+maptmut_ref <- maptmut3 %>% filter(sequence_type == "referenceseq")
+maptmut_ref <- maptmut_ref %>% select(ID, sequence)
+maptmut_ref <- maptmut_ref %>%
+  mutate(sequence = str_sub(sequence, start = 16, end = -16))
+
+#snvs regions
+snvs3 <- snvs2 %>% filter(sequence_type == "referenceseq")
+snvs3 <- snvs3 %>% select(ID, sequence)
+snvs3 <- snvs3 %>%
+  mutate(sequence = str_sub(sequence, start = 16, end = -16))
+snvs3 <- snvs3 %>% distinct()
+
+#indel regions
+notcrazyindels3 <- notcrazyindels2 %>% filter(sequence_type == "referenceseq")
+notcrazyindels3 <- notcrazyindels3 %>% select(ID, sequence)
+notcrazyindels3 <- notcrazyindels3 %>%
+  mutate(sequence = str_sub(sequence, start = 16, end = -16))
+notcrazyindels3 <- notcrazyindels3 %>% distinct()
+notcrazyindels3 <- notcrazyindels3 %>%
+  filter(nchar(sequence) == 219)
+
+#all of my variants with referenceseq of 219
+#all219ref <- bind_rows(notcrazyindels3, snvs3)
+
+#add scrambled seqs for each reference
+#all219ref_withscram <- all219ref %>%
+#  mutate(scrambled = map_chr(sequence, ~ paste0(sample(str_split(.x, "")[[1]], size = nchar(.x), replace = FALSE), collapse = "")))
+
+notcrazyindels3 <- notcrazyindels3 %>%
+  mutate(scrambled = map_chr(sequence, ~ paste0(sample(str_split(.x, "")[[1]], size = nchar(.x), replace = FALSE), collapse = "")))
+
+snvs3 <- snvs3 %>%
+  mutate(scrambled = map_chr(sequence, ~ paste0(sample(str_split(.x, "")[[1]], size = nchar(.x), replace = FALSE), collapse = "")))
+
+maptmutref_wtihscram <- maptmut_ref %>% 
+  mutate(scrambled = map_chr(sequence, ~ paste0(sample(str_split(.x, "")[[1]], size = nchar(.x), replace = FALSE), collapse = "")))
+
+#bri's negative regions
+brineg2 <- brineg %>% select(label, shortenseq)
+
+#my negative regions
+oligompraneg2 <- oligompraneg %>% select(name,shortenseq)
+
+```
+
+#getting random controls
+```{r}
+#getting scrambleds for every size and changing the middle base
+
+#select 25 from brineg
+set.seed(123) # Set seed for reproducibility
+brineg2 <- brineg2 %>%
+  mutate(chosen = row_number() %in% sample(n(), 25))
+
+#select 25 from oligompraneg
+oligompraneg2 <- oligompraneg2 %>%
+    mutate(chosen = row_number() %in% sample(n(), 25))
+
+#select 50 random from indels
+notcrazyindels3 <- notcrazyindels3 %>%
+    mutate(chosen = row_number() %in% sample(n(), 50))
+
+
+#select 50 random from snvs
+snvs3 <- snvs3 %>%
+     mutate(chosen = row_number() %in% sample(n(), 50))
+
+#select 50 random from maptmutagenesis
+maptmutref_withscram <- maptmutref_wtihscram %>%
+    mutate(chosen = row_number() %in% sample(n(), 50))
+
+
+#set up for combining the sequences
+scrammapt <- maptmutref_withscram %>%
+  filter(chosen == TRUE) %>%
+  select(ID, scrambled) %>%
+  mutate(newID219 = paste0(ID, "_219bp"))
+scramsnvs <- snvs3 %>%
+  filter(chosen == TRUE) %>%
+  select(ID, scrambled) %>%
+  mutate(newID219 = paste0(ID, "_219bp"))
+scramindels <- notcrazyindels3 %>%
+  filter(chosen == TRUE) %>%
+  select(ID, scrambled) %>%
+  mutate(newID219 = paste0(ID, "_219bp"))
+scrambecky <- oligompraneg2 %>%
+  filter(chosen == TRUE) %>%
+  mutate(ID = name) %>%
+  mutate(scrambled = shortenseq) %>%
+  select(ID, scrambled) %>%
+  mutate(newID219 = paste0(ID, "_219bp"))
+scrambri <- brineg2 %>%
+  filter(chosen == TRUE) %>%
+  mutate(ID = label) %>%
+  mutate(scrambled = shortenseq) %>%
+  select(ID, scrambled) %>%
+  mutate(newID219 = paste0(ID, "_219bp"))
+
+all_selected_scrambled <- bind_rows(scrammapt, scramsnvs, scramindels, scrambecky, scrambri)
+
+#change middle base to 3 alternates
+half_region <- (region_length - 1) / 2
+
+# Add the REF column with the Reference base (center of reference seq)
+all_selected_scrambled <- all_selected_scrambled %>%
+  mutate(REF = substr(scrambled, half_region + 1, half_region + 1))
+
+#defining the bases are
+bases <- c("A", "T", "G", "C")
+
+#check what base is in REF, create columns called ALT1, ALT2, and ALT3 with the other bases
+all_selected_scrambled <- all_selected_scrambled %>% mutate(
+  ALT1 = sapply(1:n(), function(i) {
+    setdiff(bases, c(REF[i]))[1]
+  }),
+  ALT2 = sapply(1:n(), function(i) {
+    setdiff(bases, c(REF[i], ALT1[i]))[1]
+  }),
+  ALT3 = sapply(1:n(), function(i){
+    setdiff(bases, c(REF[i], ALT1[i], ALT2[i]))[1]
+  })
+)
+
+#get alternate sequences
+middlepos <- half_region
+
+all_selected_scrambled <- all_selected_scrambled %>% mutate(
+  altseq1 = map2_chr(scrambled, ALT1, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  }),
+  
+  altseq2 = map2_chr(scrambled, ALT2, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  }),
+  
+  altseq3 = map2_chr(scrambled, ALT3, ~ {
+    refseq <- .x
+    alt_char <- .y
+    if (nchar(refseq) >= middlepos) {
+      paste0(
+        substr(refseq, 1, middlepos),
+        alt_char,
+        substr(refseq, middlepos + 2, nchar(refseq))
+      )
+    } else {
+      errormessage
+    }
+  })
+)
+
+all_selected_scrambled <- all_selected_scrambled %>%
+    mutate(ID = paste0(ID, "_scrambled"))
+
+#setup for fasta file
+#get sequences on individual rows, create names in format "maptprom_chr17_45894157_altseq1_G_to_A"
+all_selected_scrambled <- all_selected_scrambled %>%
+  pivot_longer(
+    cols = c(scrambled, altseq1, altseq2, altseq3),
+    names_to = "sequence_type",
+    values_to = "sequence"
+  ) %>%
+  mutate(ID = case_when(
+    sequence_type == "scrambled" ~ paste(ID, "reference", sep = "_"),
+    sequence_type == "altseq1" ~ paste(ID, REF, "to", ALT1, sep = "_"),
+    sequence_type == "altseq2" ~ paste(ID, REF, "to", ALT2, sep = "_"),
+    sequence_type == "altseq3" ~ paste(ID, REF, "to", ALT3, sep = "_"),
+    TRUE ~ NA_character_  # Handle any unexpected cases
+  ))
+
+#add adapters
+all_selected_scrambled <- all_selected_scrambled %>%
+  mutate(sequence = paste0(fadapter, sequence, radapter))
+
+#save as fastafile setup
+fasta_sequences_scrammut <- DNAStringSet(all_selected_scrambled$sequence)
+names(fasta_sequences_scrammut) <- all_selected_scrambled$ID
+
+# Write to a FASTA file
+writeXStringSet(fasta_sequences_scrammut, "scrammut.fasta", width = 1000)
+
+```
+
+#code to get scrambled of different sizes
+```{r}
+#prep for different sizes of scrambleds
+#
+
+all_selected_scrambled2 <- bind_rows(scrammapt, scramsnvs, scramindels, scrambecky, scrambri)
+num_loops <- 11
+
+all_selected_scrambled2 <- all_selected_scrambled2 %>%
+  rename(delete0 = scrambled)
+
+# Loop to create subsequent columns
+for (i in 1:num_loops) {
+  all_selected_scrambled2 <- all_selected_scrambled2 %>%
+    mutate(!!paste0("delete", i) := case_when(
+      i %% 2 == 1 ~ str_sub(.[[paste0("delete", i - 1)]], 2),  # Remove first character for odd
+      TRUE ~ str_sub(.[[paste0("delete", i - 1)]], 1, nchar(.[[paste0("delete", i - 1)]]) - 1)  # Remove last character for even
+    ))
+}
+
+
+
+#setup for fasta file
+#get sequences on individual rows, create names,
+#not saving the delete0 column in this case because it's accounted for in the previous code block where we change the middle character
+all_selected_scrambled2 <- all_selected_scrambled2 %>%
+  pivot_longer(
+    cols = c(delete1, delete3, delete5, delete7, delete9, delete11),
+    names_to = "sequence_type",
+    values_to = "sequence"
+  ) %>%
+  mutate(ID = paste0(ID, "_scrambled_reference_", sequence_type)
+  )
+
+#add adapters
+all_selected_scrambled2 <- all_selected_scrambled2 %>%
+  mutate(sequence = paste0(fadapter, sequence, radapter))
+
+
+#save as fastafile setup
+fasta_sequences_scramsize <- DNAStringSet(all_selected_scrambled2$sequence)
+names(fasta_sequences_scramsize) <- all_selected_scrambled2$ID
+
+# Write to a FASTA file
+writeXStringSet(fasta_sequences_scramsize, "scramsize.fasta", width = 1000)
+
+```
+
+#get the rest of the scrambled to fill up the tier
+```{r}
+#select remaining scrambleds
+scrammapt2 <- maptmutref_withscram %>%
+  filter(chosen == FALSE) %>%
+  select(ID, scrambled)
+scramsnvs2 <- snvs3 %>%
+  filter(chosen == FALSE) %>%
+  select(ID, scrambled)
+scramindels2 <- notcrazyindels3 %>%
+  filter(chosen == FALSE) %>%
+  select(ID, scrambled)
+scrambecky2 <- oligompraneg2 %>%
+  filter(chosen == FALSE) %>%
+  mutate(ID = name) %>%
+  mutate(scrambled = shortenseq) %>%
+  select(ID, scrambled)
+scrambri2 <- brineg2 %>%
+  filter(chosen == FALSE) %>%
+  mutate(ID = label) %>%
+  mutate(scrambled = shortenseq) %>%
+  select(ID, scrambled)
+
+#select 800 from bri's negatives, not in previous block of samples
+scrambri3 <- scrambri2 %>%
+    mutate(chosen = row_number() %in% sample(n(), 800)) %>% 
+    filter(chosen == TRUE)
+#select 250 from mapt promoter, not in previous block of scrambles
+scrammapt3 <- scrammapt2 %>%
+  mutate(chosen = row_number() %in% sample(n(), 250)) %>%
+  filter(chosen == TRUE)
+#select 236 from indels, not in previous block (all of remaining indels, no selection needed)
+scramindels2
+#select 2053 from snvs, not in previous block, fill the rest of the oligo tier
+scramsnvs3 <- scramsnvs2 %>%
+   mutate(chosen = row_number() %in% sample(n(), 2053)) %>%
+  filter(chosen == TRUE)
+#get remaining 175 from becky scrambles, no selection needed
+scrambecky2
+
+#combine into a single tibble
+leftoverscram <- bind_rows(scrambri3, scrammapt3, scramindels2, scramsnvs3, scrambecky2)
+
+#add adapters and add _scrambled to end of ID
+leftoverscram <- leftoverscram %>%
+  mutate(ID = paste0(ID, "_scrambled")) %>%
+  mutate(scrambled = paste0(fadapter, scrambled, radapter))
+
+#save as fastafile setup
+fasta_sequencesscram <- DNAStringSet(leftoverscram$scrambled)
+names(fasta_sequencesscram) <- leftoverscram$ID
+
+# Write to a FASTA file
+writeXStringSet(fasta_sequencesscram, "leftoverscrambles.fasta", width = 1000)
+```
+
+#cat fasta files together for final design
