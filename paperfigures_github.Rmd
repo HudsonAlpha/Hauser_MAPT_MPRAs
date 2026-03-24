@@ -1,0 +1,3615 @@
+---
+title: "Untitled"
+author: "Becky"
+date: "2026-03-19"
+output: html_document
+---
+#libraries
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(rtracklayer)
+library(plotgardener)
+library(GenomicRanges)
+library(org.Hs.eg.db)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(Biostrings)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(DESeq2)
+library(edgeR)
+library(ggrepel)
+library(Seurat)
+library(ComplexHeatmap)
+library(tidyHeatmap)
+library(reshape2)
+library(colorspace)
+library(circlize)
+```
+
+## MPRA output
+### import data
+```{r}
+#import Neurons
+bacmpra <- read_tsv("/cluster/home/rhauser/files/rmhex01/MPRAflowCount_3reps/output_mpranalyze/Neurons/testEmpirical_alpha_RMHex01_Neurons_results_labeled_analysis2.tsv")
+
+#extract start location
+bacmpra <- bacmpra %>%
+  mutate(start = as.integer(str_extract(label, "(?<=bin)\\d+")))
+bacmpra$end <- bacmpra$start + 99
+bacmpra$chr <- "chr17"
+bacmprahits <- bacmpra %>% filter(pval.mad<=0.05)
+bacmpra$score <- -log10(bacmpra$pval.mad)
+bacmprasignal <- bacmpra %>% dplyr::select(chr, start, end, score)
+bacmprasignal <- bacmprasignal %>% arrange(by=start)
+
+gr_bacmpra <- GRanges(seqnames = bacmprahits$chr,
+                      ranges = IRanges(start = bacmprahits$start,
+                                       end = bacmprahits$end))
+gr_bacmpra_reduce <- reduce(gr_bacmpra)
+
+
+#import HEKs
+hekbacmpra <- read_tsv("/cluster/home/rhauser/files/rmhex01/MPRAflowCount_3reps/output_mpranalyze/HEK293FT/testEmpirical_alpha_RMHex01_HEK293FT_results_labeled_analysis2.tsv")
+#extract start location
+hekbacmpra <- hekbacmpra %>%
+  mutate(start = as.integer(str_extract(label, "(?<=bin)\\d+")))
+hekbacmpra$end <- hekbacmpra$start + 99
+hekbacmpra$chr <- "chr17"
+
+hekbacmprahits <- hekbacmpra %>% filter(pval.mad<=0.05)
+
+gr_hekbacmpra <- GRanges(seqnames = hekbacmprahits$chr,
+                      ranges = IRanges(start = hekbacmprahits$start,
+                                       end = hekbacmprahits$end))
+gr_hekbacmpra_reduce <- reduce(gr_hekbacmpra)
+
+#join bacs and neurons into 1 tibble
+bacmpra$group <- "neurons"
+hekbacmpra$group <- "HEKs"
+
+hekbacmpratemp <- hekbacmpra %>% dplyr::rename_with(~paste0("hek_", .), -label)
+bacboth <- bacmpra %>% left_join(hekbacmpratemp, by="label")
+bacboth <- bacboth %>% drop_na()
+bacboth <- bacboth %>%
+  mutate(group = case_when(
+    hek_pval.mad <= 0.05 & pval.mad <= 0.05 ~ "sigboth",
+    hek_pval.mad <= 0.05 ~ "sighek",
+    pval.mad <= 0.05 ~ "signeuron",
+    TRUE ~ "ns"
+  ))
+```
+
+#### correlation plot of HEK and Neuron Hits
+```{r}
+baccorrplot <- ggplot(bacboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1.5, alpha=0.4) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_minimal() +
+  theme(legend.position = "none")
+  #xlim(0, 15) +   # Set x-axis limits from 0 to 15
+  #ylim(0, 15)
+ggsave(filename="bacmpra_celltypecorr_pval_mad.pdf", plot=baccorrplot, width=4.44, height=4.44, units="in")
+
+baccorrplotmad <- ggplot(bacboth, aes(x=mad.score, y=hek_mad.score, color = group)) +
+  geom_point(size = 1.5, alpha=0.4) +
+  geom_vline(xintercept = 1.65, linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = 1.65, linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons mad.score", y = "HEK293FT mad.score", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_minimal() +
+  theme(legend.position = "none")
+  #xlim(0, 15) +   # Set x-axis limits from 0 to 15
+  #ylim(0, 15)
+ggsave(filename="bacmpra_celltypecorr_madscore.pdf", plot=baccorrplotmad, width=4.44, height=4.44, units="in")
+
+baccorrplotcutoff <- ggplot(bacboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1.5, alpha=0.4) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_minimal() +
+  theme(legend.position = "none") +
+  xlim(0, 15) +   
+  ylim(0, 15)
+ggsave(filename="bacmpra_celltypecorr_pval_mad_cutoff.pdf", plot=baccorrplotcutoff, width=4.44, height=4.44, units="in")
+
+#testbac <- bacboth %>% dplyr::select(mad.score, hek_mad.score, group)
+#testbac %>% filter(group=="sighek") %>% arrange(by=-hek_mad.score)
+
+
+baccorrplot <- ggplot(bacboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_x_continuous(expand = c(0, 0), limits=c(0,15)) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0,15))
+ggsave(filename="bacmpra_celltypecorr_pval_mad2.pdf", plot=baccorrplot, width=4.44, height=4.44, units="in")
+
+baccorrplot <- ggplot(bacboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_x_continuous(expand = c(0, 0), limits=c(0,40)) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0,40))
+ggsave(filename="bacmpra_celltypecorr_pval_mad2_uncropped.pdf", plot=baccorrplot, width=4.44, height=4.44, units="in")
+
+baccorrplot <- ggplot(bacboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_x_continuous(expand = c(0, 0), limits=c(0,10)) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0,40))
+ggsave(filename="bacmpra_celltypecorr_pval_mad2_uncropped_notsamescale.pdf", plot=baccorrplot, width=4.44, height=4.44, units="in")
+
+bacboth <- bacboth %>%
+  mutate(pval.mad = if_else(pval.mad < 2.2e-16, 2.2e-16, pval.mad))
+bacboth <- bacboth %>%
+  mutate(hek_pval.mad = if_else(hek_pval.mad < 2.2e-16, 2.2e-16, hek_pval.mad))
+baccorrplot <- ggplot(bacboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c( "#66298E", "grey55", "#C873EF", "#C873EF")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_x_continuous(expand = c(0, 0), limits=c(0,16)) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0,16))
+ggsave(filename="bacmpra_celltypecorr_pval_mad2_uncropped_artlimitpval.pdf", plot=baccorrplot, width=4.44, height=4.44, units="in")
+```
+
+#### barplots of total hits per cell type
+```{r}
+#make count tibble
+bactotal <- tibble(
+  id = c("neuronhits", "neuronreduce", "hekhits", "hekreduce"),
+  celltype = c("neurons", "neurons", "heks", "heks"),
+  group = c("all", "reduced", "all", "reduced"),
+  count = c(length(gr_bacmpra), length(gr_bacmpra_reduce), length(gr_hekbacmpra), length(gr_hekbacmpra_reduce))
+)
+
+# Set group order
+bactotal$celltype <- factor(bactotal$celltype, levels = c("neurons", "heks"))
+
+bactotalbar <- ggplot(bactotal, aes(x=celltype, y=count, fill=group)) +
+  geom_bar(position=position_dodge(width=.8), stat="identity", color="#C873EF", width=0.7) +
+  scale_fill_manual(values=c("#C873EF", "white")) +
+  theme_minimal()
+ggsave(filename="bactotalhits.pdf", plot=bactotalbar, width=4.44, height=4.44, units="in")
+
+```
+
+## overlap of ENCODE CREs
+```{r}
+encodecres_gr <- GRanges(encodecres)
+priority_levels <- c("PLS", "pELS", "dELS", "CA", "CA-CTCF","CA-H3K4me3", "CA-TF", "TF", "None")
+
+gr_hekbacmpra_reduce$creType <- "None"
+overlapheks <- findOverlaps(gr_hekbacmpra_reduce, encodecres_gr)
+annot_df <- data.frame(peak_index = queryHits(overlapheks), annotation = encodecres_gr$creType[subjectHits(overlapheks)])
+annot_df$priority <- match(annot_df$annotation, priority_levels)
+final_annot <- annot_df %>% group_by(peak_index) %>% slice_min(order_by=priority, n=1) %>% ungroup()
+gr_hekbacmpra_reduce$creType[final_annot$peak_index] <- final_annot$annotation
+
+gr_bacmpra_reduce$creType <- "None"
+overlapneur <- findOverlaps(gr_bacmpra_reduce, encodecres_gr)
+annot_df_neur <- data.frame(peak_index = queryHits(overlapneur), annotation = encodecres_gr$creType[subjectHits(overlapneur)])
+annot_df_neur$priority <- match(annot_df_neur$annotation, priority_levels)
+final_annot_neur <- annot_df_neur %>% group_by(peak_index) %>% slice_min(order_by=priority, n=1) %>% ungroup()
+gr_bacmpra_reduce$creType[final_annot_neur$peak_index] <- final_annot_neur$annotation
+
+
+gr_hekhitstib <- as_tibble(gr_hekbacmpra_reduce)
+gr_hekhitstib$group <- "HEK293FT"
+gr_neuronhitstib <- as_tibble(gr_bacmpra_reduce)
+gr_neuronhitstib$group <- "Neurons"
+
+counttib_neurons <- gr_neuronhitstib %>%
+  dplyr::count(creType, name = "count")
+counttib_neurons <- counttib_neurons %>%
+  mutate(fraction = count / sum(count))
+counttib_neurons$group <- "Neurons"
+
+counttib_heks <- gr_hekhitstib %>% dplyr::count(creType, name="count")
+counttib_heks <- counttib_heks %>% mutate(fraction = count / sum(count))
+counttib_heks$group <- "HEK293FT"
+
+results_oligocombined <- rbind(counttib_heks, counttib_neurons)
+
+# Set group order
+results_oligocombined$group <- factor(results_oligocombined$group, levels = c("Neurons", "HEK293FT"))
+
+hekneuronoligocrestack_fraction <- ggplot(results_oligocombined, aes(x=group, y=fraction, fill = fct_reorder(creType, fraction))) + 
+  geom_bar(position="stack", stat="identity", show.legend = TRUE) +
+  theme_minimal() + 
+  ylab("Percent CRE Overlap") + 
+  ggtitle("Overlap Count by CRE Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_classic() +
+  scale_fill_manual(values = color_list) +
+  labs(fill = "Encode CREs") +
+  #scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0))
+ggsave(filename="creoverlap_reducedhits_bacmpra_heksandneurons_stackedbar_fraction4_reducedhitsashlynway.pdf", plot=hekneuronoligocrestack_fraction, width=4.44, height=4.44, units="in")
+
+
+```
+
+### import data - Neurons (one tailed test)
+```{r}
+#load neuron hits with scrambled
+neurons <- read_tsv("/cluster/home/rhauser/files/rmhex02/MPRAflowCount_reps123/output_mpranalyze/Neurons/testEmpirical_alpha_Neurons_results_labeled_prefilt_allcontrols_oneside.tsv")
+
+neurons$neglog10pval <- -log10(neurons$pval.mad)
+neurons_noscram <- neurons %>% filter(!str_detect(label, "scram"))
+neurons_noscram$label2 <- neurons_noscram$label
+#split up label column into usable chr, start, end info
+neurons_noscram <- neurons_noscram %>% separate(label2, into = c("prefix", "chr", "pos"), sep = "::") 
+neurons_noscram <- neurons_noscram %>% separate(chr, into = c("chr", "start"), sep = ":")
+neurons_noscram<- neurons_noscram %>% separate(start, into = c("start", "end"), sep = "-")
+neurons_noscram <- neurons_noscram %>% mutate(end = str_remove(end, "\\+$"))
+#neurons_noscram <- neurons_noscram %>% dplyr::select(chr, start, end, mad.score, pval.mad, neglog10pval, label)
+neurons_noscram <- neurons_noscram %>% arrange(by=start)
+neurons_noscram$start <- as.integer(neurons_noscram$start)
+neurons_noscram$end <- as.integer(neurons_noscram$end)
+
+#neurons_noscram <- neurons_noscram %>% dplyr::select(chr, start, end, neglog10pval)
+neurons_hits <- neurons_noscram %>% dplyr::select(chr, start, end, pval.mad)
+neurons_hits <- neurons_hits %>% filter(pval.mad <=0.05)
+neurons_hits <- neurons_hits %>% arrange(by=start)
+neurons_hits01 <- neurons_noscram %>% dplyr::select(chr,start,end, pval.mad) %>%
+  filter(pval.mad <= 0.01) %>%
+  arrange(by=start)
+
+
+gr_neuronhits <- GRanges(seqnames = neurons_hits$chr,
+                      ranges = IRanges(start = as.numeric(neurons_hits$start),
+                                       end = as.numeric(neurons_hits$end)))
+gr_neuronhits_reduce <- GenomicRanges::reduce(gr_neuronhits)
+
+
+
+
+#mean signal
+avg_neurons <- read_tsv("/cluster/home/rhauser/files/rmhex02/onesidedneurons3repswithcontrolsneglog10pval.sorted.mean.bed", col_names=c("chr", "start", "end", "neglog10pval"))
+avg_neurons$start <- avg_neurons$start + 1
+avg_neurons$score <- avg_neurons$neglog10pval
+
+avg_neurons <- avg_neurons %>% arrange(by=start)
+```
+
+## import data -HEKs (one tailed test)
+```{r}
+#HEKs
+#get rmhex02 hek hits, 3 reps, one sided test with negative controls
+heks <- read_tsv("/cluster/home/rhauser/files/rmhex02/MPRAflowCount_reps123/output_mpranalyze/HEK293FT/testEmpirical_alpha_HEK293FT_results_labeled_prefilt_allcontrols.tsv")
+
+#remove scrambled sequences, if any were positive hits
+heks_noscram <- heks %>% filter(!str_detect(label, "scram"))
+#split up label column into usable chr, start, end info
+heks_noscram$label2 <- heks_noscram$label
+heks_noscram <- heks_noscram %>% separate(label2, into = c("prefix", "chr", "pos"), sep = "::") 
+heks_noscram <- heks_noscram %>% separate(chr, into = c("chr", "start"), sep = ":")
+heks_noscram <- heks_noscram %>% separate(start, into = c("start", "end"), sep = "-")
+heks_noscram <- heks_noscram %>% mutate(end = str_remove(end, "\\+$"))
+
+hek_hits <- heks_noscram %>% filter(pval.mad<=0.05)
+gr_hekhits <- GRanges(seqnames = hek_hits$chr,
+                      ranges = IRanges(start = as.numeric(hek_hits$start),
+                                       end = as.numeric(hek_hits$end)))
+gr_hekhits_reduce <- GenomicRanges::reduce(gr_hekhits)
+```
+
+#### combine hek and neuron data
+```{r}
+hekoligompratemp <- heks_noscram %>% dplyr::rename_with(~paste0("hek_", .), -label)
+oligoboth <- neurons_noscram %>% left_join(hekoligompratemp, by="label")
+oligoboth <- oligoboth %>%
+  mutate(group = case_when(
+    hek_pval.mad <= 0.05 & pval.mad <= 0.05 ~ "sigboth",
+    hek_pval.mad <= 0.05 ~ "sighek",
+    pval.mad <= 0.05 ~ "signeuron",
+    TRUE ~ "ns"
+  ))
+#oligoboth <- oligoboth %>% drop_na()
+
+
+```
+
+# import other data
+```{r}
+bricrisprpos_noprom <- tibble(
+  chr="chr17",
+  start=c(45219248, 45241086, 45309310, 45428887, 45431544, 45848403, 45873588, 45940785, 45942182, 45971524),
+  end=c(45219836, 45242238, 45309777, 45429757, 45432556, 45849786, 45874056, 45941252, 45942650, 45971991),
+  name=c(-674458, -652338, -584456, -464677, -461949, -44905, -20178, 47019, 48416, 77758)
+)
+bricrisprpos_noprom$size <- bricrisprpos_noprom$end - bricrisprpos_noprom$start
+bricrisprpos_noprom$start <- as.numeric(bricrisprpos_noprom$start)
+bricrisprpos_noprom$end <- as.numeric(bricrisprpos_noprom$end)
+
+variants1 <- read_tsv("/cluster/home/rhauser/files/rmhex02/ADSP_chr17_variation_mpra_overlap_9-5-24.list.tsv", skip=3466)
+variants1bed <- variants1 %>% dplyr::select('#CHROM', POS)
+variants1bed$end <- variants1$POS + 1
+variants1 <- variants1 %>% arrange(by=POS)
+
+mapt_snmultiomics_brain <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/mapt_multiomics_brain.bed", skip=1, col_names=c("chr","start","end"))
+
+maptluc <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/luciferaseregions.bed", skip=1, col_names=c("chr","start","end"))
+
+maptcrispr <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/CRISPRguides.bed", skip=1, col_names=c("chr", "start", "end"))
+
+maptcapturec_gluta <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/mapt_gluta_capturec.bed", skip=1, col_names=c("chr","start","end"))
+
+mapt_snmultiomics_culture <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/mapt_multiomics_neurons.bed", skip=1, col_names=c("chr", "start", "end"))
+
+mapt_hicgluta <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/mapt_hic_hiccups_gluta.bed", skip=1, col_names=c("chr", "start", "end"))
+
+maptcapturec_gaba <- read_tsv("/cluster/home/rhauser/files/rogers2024supplementaldata/mapt_gaba_capturec.bed", skip=1, col_names=c("chr", "start", "end"))
+
+beckycrispr <- read_tsv("/cluster/home/rhauser/files/rmhex02/CRISPRi/rmhex02crisprguidesfinal.bed", skip=1, col_names=c("chr", "start", "end", "region"))
+```
+
+### overlap of ENCODE CREs
+```{r}
+encodecres_gr <- GRanges(encodecres)
+priority_levels <- c("PLS", "pELS", "dELS", "CA", "CA-CTCF","CA-H3K4me3", "CA-TF", "TF", "None")
+
+gr_hekhits_reduce$creType <- "None"
+overlapheks <- findOverlaps(gr_hekhits_reduce, encodecres_gr)
+annot_df <- data.frame(peak_index = queryHits(overlapheks), annotation = encodecres_gr$creType[subjectHits(overlapheks)])
+annot_df$priority <- match(annot_df$annotation, priority_levels)
+final_annot <- annot_df %>% group_by(peak_index) %>% slice_min(order_by=priority, n=1) %>% ungroup()
+gr_hekhits_reduce$creType[final_annot$peak_index] <- final_annot$annotation
+
+gr_neuronhits_reduce$creType <- "None"
+overlapneur <- findOverlaps(gr_neuronhits_reduce, encodecres_gr)
+annot_df_neur <- data.frame(peak_index = queryHits(overlapneur), annotation = encodecres_gr$creType[subjectHits(overlapneur)])
+annot_df_neur$priority <- match(annot_df_neur$annotation, priority_levels)
+final_annot_neur <- annot_df_neur %>% group_by(peak_index) %>% slice_min(order_by=priority, n=1) %>% ungroup()
+gr_neuronhits_reduce$creType[final_annot_neur$peak_index] <- final_annot_neur$annotation
+
+
+gr_hekhitstib <- as_tibble(gr_hekhits_reduce)
+gr_hekhitstib$group <- "HEK293FT"
+gr_neuronhitstib <- as_tibble(gr_neuronhits_reduce)
+gr_neuronhitstib$group <- "Neurons"
+
+counttib_neurons <- gr_neuronhitstib %>%
+  dplyr::count(creType, name = "count")
+counttib_neurons <- counttib_neurons %>%
+  mutate(fraction = count / sum(count))
+counttib_neurons$group <- "Neurons"
+
+counttib_heks <- gr_hekhitstib %>% dplyr::count(creType, name="count")
+counttib_heks <- counttib_heks %>% mutate(fraction = count / sum(count))
+counttib_heks$group <- "HEK293FT"
+
+results_oligocombined <- rbind(counttib_heks, counttib_neurons)
+
+# Set group order
+results_oligocombined$group <- factor(results_oligocombined$group, levels = c("Neurons", "HEK293FT"))
+
+hekneuronoligocrestack_fraction <- ggplot(results_oligocombined, aes(x=group, y=fraction, fill = fct_reorder(creType, fraction))) + 
+  geom_bar(position="stack", stat="identity", show.legend = TRUE) +
+  theme_minimal() + 
+  ylab("Percent CRE Overlap") + 
+  ggtitle("Overlap Count by CRE Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_classic() +
+  scale_fill_manual(values = color_list) +
+  labs(fill = "Encode CREs") +
+  #scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0))
+ggsave(filename="creoverlap_reducedhits_oligompra_heksandneurons_stackedbar_fraction4_reducedhitsashlynway.pdf", plot=hekneuronoligocrestack_fraction, width=4.44, height=4.44, units="in")
+
+```
+
+
+#### correlation plot of Neurons and HEKs hits
+```{r}
+oligocellcorr <- ggplot(oligoboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1.5, alpha=0.4) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c("#27706E","gray55", "#4FE0DC", "#4FE0DC")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_minimal() +
+  theme(legend.position = "none")
+ggsave(filename="oligompra_celltypecorr_pval_mad.pdf", plot=oligocellcorr, width=4.44, height=4.44, units="in")
+
+oligocellcorrmad <- ggplot(oligoboth, aes(x=mad.score, y=hek_mad.score, color = group)) +
+  geom_point(size = 1.5, alpha=0.4) +
+  #geom_vline(xintercept = 1.6, linetype = "dotted", color = "black") +  
+  #geom_hline(yintercept = 1.96, linetype = "dotted", color = "black") +
+ scale_color_manual(values = c("#027C89","gray55", "#4FE0DC", "#4FE0DC")) +
+  labs(x = "Neurons mad.score", y = "HEK293FT mad.score", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_minimal() +
+  theme(legend.position = "none")
+ggsave(filename="oligompra_celltypecorr_madscore_nodottedline.pdf", plot=oligocellcorrmad, width=4.44, height=4.44, units="in")
+
+oligobothtest <- oligoboth %>% dplyr::select(label, group, mad.score, hek_mad.score)
+oligobothtest <- oligobothtest %>% filter(group=="signeuron")
+oligobothtest %>% arrange(by=-mad.score)
+summary(oligobothtest)
+
+oligocellcorrcutoff <- ggplot(oligoboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1.5, alpha=0.4) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c("#27706E","gray55", "#4FE0DC", "#4FE0DC")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_x_continuous(limits = c(0, 10)) +
+  scale_y_continuous(limits = c(0, 10))
+ggsave(filename="oligompra_celltypecorr_pval_cutoff.pdf", plot=oligocellcorrcutoff, width=4.44, height=4.44, units="in")
+
+oligoboth <- oligoboth %>%
+  mutate(pval.mad = if_else(pval.mad < 2.2e-16, 2.2e-16, pval.mad))
+oligoboth <- oligoboth %>%
+  mutate(hek_pval.mad = if_else(hek_pval.mad < 2.2e-16, 2.2e-16, hek_pval.mad))
+oligocellcorrcutoff <- ggplot(oligoboth, aes(x=-log10(pval.mad), y=-log10(hek_pval.mad), color = group)) +
+  geom_point(size = 1) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black") +
+ scale_color_manual(values = c("#27706E","gray55", "#4FE0DC", "#4FE0DC")) +
+  labs(x = "Neurons -log10(pval.mad)", y = "HEK293FT -log10(pval.mad)", title = "MPRA Correlation\nNeurons vs. HEK293FT") + 
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_x_continuous(expand = c(0, 0), limits=c(0,16)) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0,16))
+ggsave(filename="oligompra_celltypecorr_pval_mad2_uncropped_artlimitpval.pdf", plot=oligocellcorrcutoff, width=4.44, height=4.44, units="in")
+
+```
+#### barplots of total hits per cell type
+```{r}
+#make count tibble
+oligototal <- tibble(
+  id = c("neuronhits", "neuronreduce", "hekhits", "hekreduce"),
+  celltype = c("neurons", "neurons", "heks", "heks"),
+  group = c("all", "reduced", "all", "reduced"),
+  count = c(length(gr_neuronhits), length(gr_neuronhits_reduce), length(gr_hekhits), length(gr_hekhits_reduce))
+)
+
+#set order
+oligototal$celltype <- factor(oligototal$celltype, levels = c("neurons", "heks"))
+
+oligototalbar <- ggplot(oligototal, aes(x=celltype, y=count, fill=group)) +
+  geom_bar(position=position_dodge(width=.8), stat="identity", color="#4FE0DC", width=0.7) +
+  scale_fill_manual(values=c("#4FE0DC", "white")) +
+  theme_minimal()
+ggsave(filename="oligototalhits.pdf", plot=oligototalbar, width=4.44, height=4.44, units="in")
+
+```
+
+#### plot gardener track of crispr pos region (region #18), one tailed p0.05, line at pvalue of 0.05
+```{r}
+#region 18
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region18_onetailedp05_sigline.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides = FALSE, bg = NA)
+
+pageGuideHide()
+
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45779500, chromend = 45782500, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot CRISPR guides
+plotRanges(data = beckycrispr, params = params_a, collapse = TRUE, y = 1, height = 0.25, boxHeight=0.25, fill = "#D88C9A")
+
+#plot promoter capturec
+plotRanges(data = maptcapturec_gluta, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#8E7DBE")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.2, height = .75, fill = "#86EAE6")
+
+threshold <- -log10(0.05)
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 2, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,3), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+```
+
+#### plot gardener track of crispr region 5 - one tailed p05, sig line
+```{r}
+#region 5
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region5_onetailedp05_sigline.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45821000, chromend = 45823000, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#neeed to remove one crispr guide
+#plot CRISPR guides
+plotRanges(data = beckycrispr, params = params_a, collapse = TRUE, y = 1, height = 0.25, boxHeight=0.25, fill = "#D88C9A")
+
+#plot promoter capturec
+plotRanges(data = mapt_hicgluta, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#8E7DBE")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 2, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,4), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+```
+
+#### plot gardener region 9
+```{r}
+#region 9
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region9_onetailedp05_sigline.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 46036535, chromend = 46039410, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#neeed to remove one crispr guide
+#plot CRISPR guides
+plotRanges(data = beckycrispr, params = params_a, collapse = TRUE, y = 1, height = 0.25, boxHeight=0.25, fill = "#D88C9A")
+
+#plot promoter capturec
+#plotRanges(data = mapt_hicgluta, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#8E7DBE")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold <- -log10(0.05)
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 2, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,6), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+```
+
+#### plot gardener region 8
+```{r}
+#### plot gardener track of crispr region 5 - one tailed p05, sig line
+#region 8
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="/cluster/home/rhauser/files/graphs/paperfigures/region8_onetailedp05_sigline.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 46029900, chromend = 46031100, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#neeed to remove one crispr guide
+#plot CRISPR guides
+plotRanges(data = beckycrispr, params = params_a, collapse = TRUE, y = 1, height = 0.25, boxHeight=0.25, fill = "#D88C9A")
+
+#plot promoter capturec
+plotRanges(data = maptcapturec_gluta, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#8E7DBE")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold <- -log10(0.05)
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 2, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,10), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+```
+
+####mapt prom region plotgardener
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="maptprom_onetailedp05_sigline.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45893536, chromend = 45895535, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#neeed to remove one crispr guide
+#plot CRISPR guides
+#plotRanges(data = beckycrispr, params = params_a, collapse = TRUE, y = 1, height = 0.25, boxHeight=0.25, fill = "#D88C9A")
+
+#plot promoter capturec
+#plotRanges(data = mapt_hicgluta, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#8E7DBE")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,15), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45428787_45429857
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45428787_45429857.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45428787, chromend = 45429857, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = -0.3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = mapt_snmultiomics_brain, params = params_a, order.="random", y = -0.1, height = 0.75, fill = "#D88C9A")
+
+#plot maptcapturec_gluta
+plotRanges(data = maptcapturec_gluta, params = params_a, order. ="random", y = 0.1, height = .75, fill = "#8E7DBE")
+
+plotRanges(data = maptluc, params = params_a, order. ="random", y = -0.5, height = .75, fill = "#037971")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 1.25, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,2), fontsize = 8, digits=3)
+
+baclogplot <- plotSignal(data = bacmprasignal, params = params_a, negData = TRUE, y = 2.5, height = 0.75, fill = "#1c9c98", line = "#1c9c98")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=baclogplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = baclogplot,axisLine = TRUE, at=c(0,1.5), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 3.0, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+```
+
+####bri region 45848303_45849886
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45848303_45849886.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45848303, chromend = 45849886, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = mapt_snmultiomics_brain, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#D88C9A")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,4), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45873488_45874156
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45873488_45874156.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45873488, chromend = 45874156, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,3), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45940685_45941352
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45940685_45941352.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45940685, chromend = 45941352, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = mapt_snmultiomics_brain, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#D88C9A")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,2), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45942082_45942750
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45942082_45942750.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45942082, chromend = 45942750, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = mapt_snmultiomics_brain, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#D88C9A")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,4), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45971424_45972091
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45971424_45972091.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45971424, chromend = 45972091, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = maptcapturec_gaba, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#8E7DBE")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = avg_neurons, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,3.5), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45431444_45432656
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45431444_45432656.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45431444, chromend = 45432656, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = mapt_snmultiomics_brain, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#D88C9A")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = bacmprasignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,1.5), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45219148_45219936
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45219148_45219936.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45219148, chromend = 45219936, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = maptcapturec_gaba, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#8E7DBE")
+
+#plot luciferase
+#plotRanges(data = maptcapturec_gluta, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+plotRanges(data = mapt_hicgluta, params = params_a, order.="random", y = 0.9, height = 0.75, fill = "#D88C9A")
+
+#plot luciferase
+plotRanges(data = maptcapturec_gluta, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#6852A3")
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = bacmprasignal, params = params_a, negData = TRUE, y = 2.25, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,1.5), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45240986_45242338
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45240986_45242338.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45240986, chromend = 45242338, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+plotRanges(data = mapt_snmultiomics_culture, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#8E7DBE")
+
+#plot luciferase
+plotRanges(data = mapt_snmultiomics_brain, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#d88c9a")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = bacmprasignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,3), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45309210_45309877
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45309210_45309877.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45309210, chromend = 45309877, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+
+ 
+#plot bricrispr
+plotRanges(data = bricrisprpos_noprom, params = params_a, order. ="random", y = .3, height = .75, fill = "#0D3B66")
+
+#neeed to remove one crispr guide
+#plot mapt_snmultiomics_brain
+#plotRanges(data = maptcapturec_gaba, params = params_a, order.="random", y = 0.5, height = 0.75, fill = "#8E7DBE")
+
+#plot luciferase
+plotRanges(data = maptluc, params = params_a, order. ="random", y = 0.7, height = .75, fill = "#037971")
+#861657
+
+
+#plot mpra data
+#plotRanges(data = neurons_hits, params = params_a, order. ="random", y = 1.1, height = .75, fill = "#86EAE6")
+
+threshold = -log10(0.05)
+
+#cap signal
+#cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+
+#plot ompra
+oligologplot <- plotSignal(data = bacmprasignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,2), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+#complex heatmap
+```{r}
+
+# Make sure log2FoldChange is numeric
+filtered_data$log2FoldChange <- as.numeric(filtered_data$log2FoldChange)
+
+# Pivot to wide format
+mat <- dcast(filtered_data, gene ~ gRNA, value.var = "log2FoldChange", fill = 0)
+
+gene_order <- c("DBF4B", "ADAM11", "GJC1", "EFTUD2", "GFAP", "KIF18B", "NMT1", "PLCD3",
+                "ACBD4", "HEXIm1", "HEXIM2", "FMNL1", "MAP3K14", "ARHGAP27", 
+                "PLEKHM1", "MAPT", "KANSL1")
+
+# Desired gRNA (column) order
+gRNA_order <- c("reg1", "reg2", "reg11", "reg14", "reg18", "reg4", "reg15", 
+                "reg5", "reg13", "reg6", "reg7", "prom", "reg8", "reg9", "reg10")
+# Convert to matrix, set rownames
+mat_matrix <- as.matrix(mat[,-1])
+rownames(mat_matrix) <- mat$gene
+# Ensure that your gene and gRNA order values exist in the matrix
+gene_order <- gene_order[gene_order %in% rownames(mat_matrix)]
+gRNA_order <- gRNA_order[gRNA_order %in% colnames(mat_matrix)]
+
+# Reorder the matrix
+mat_matrix_ordered <- mat_matrix[gene_order, gRNA_order]
+
+col_fun = colorRamp2(c(-2,-0.25,0,0.25,2), hcl_palette ="Purple-Yellow")
+
+pdf("complexheatmap_200kb.pdf", width = 8, height = 8)
+Heatmap(mat_matrix_ordered, col=col_fun, cluster_rows=FALSE, cluster_columns=FALSE, border=TRUE)
+dev.off()
+
+distmaptprom <- c(988706, 522197, 243399, 238653, 112735, 90799, 74247, 72162, 65587, 56834, 38368, 0, 136474, 143964, 178943)
+
+
+column_col <- colorRamp2(c(0, 100000, 200000, 500000, 1000000), hcl_palette = "RdPu", reverse=TRUE)
+column_annot <- HeatmapAnnotation(dist=distmaptprom, col=list(dist=column_col), border=TRUE)
+
+
+
+pdf("complexheatmap_200kb.pdf", width = 8, height = 8)
+Heatmap(mat_matrix_ordered, col=col_fun, cluster_rows=FALSE, cluster_columns=FALSE, border=TRUE, top_annotation=column_annot)
+dev.off()
+
+```
+
+
+
+##Graph snvs overlap heks and neurons, default filt, implement a logFC absvalue of at least 0.1
+```{r}
+options(scipen=999)
+library(scales)
+snvsheks <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/heks/bcalm_snvs_labeled_heks_10bcthres.tsv")
+snvsneurons <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_snvs_labeled_neurons_10bcthres.tsv")
+
+allsnvs <- full_join(
+  snvsheks %>% rename_with(~paste0(.x, ".hek"), -element),
+  snvsneurons %>% rename_with(~paste0(.x, ".neuron"), -element),
+  by="element"
+)
+
+allsnvs <- allsnvs %>% mutate(sig = case_when(
+  adj.P.Val.hek <=0.05 & adj.P.Val.neuron <= 0.05 & abs(logFC.hek) > 0.1 & abs(logFC.neuron) >0.1 ~ "sigboth",
+  adj.P.Val.hek <=0.05 & abs(logFC.hek) >0.1 ~ "sighek",
+  adj.P.Val.neuron <=0.05 & abs(logFC.neuron) >0.1 ~ "signeuron",
+  TRUE ~ "ns"
+))
+
+write_tsv(allsnvs, "allsnvs.tsv")
+
+allsnvs$sig <- factor(allsnvs$sig, 
+                        levels = c("ns", "sighek", "signeuron", "sigboth"))
+
+allsnvs <- allsnvs %>%
+  arrange(sig)
+
+snvscellcorr <- ggplot(allsnvs, aes(x = logFC.hek, y = logFC.neuron, color = sig)) +
+  geom_point(size = 1.5) +
+  scale_color_manual(name="Adj.P.Val & logFC cutoff",
+    values = c(
+      "sigboth"   = "#8332b5",
+      "sighek"    = "#6acfdc",
+      "signeuron" = "#ec5bb4",
+      "ns"        = "#e0e0e0"
+    ),
+    labels = c(
+    "ns"        = "None",
+    "sighek"    = "HEKs",   # or your exact text
+    "signeuron" = "Neurons",
+    "sigboth"   = "HEKs & Neurons"
+  )) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") +
+  labs(
+    x = "HEK293FT logFC",
+    y = "Neuron logFC",
+    title = "SNVs \nNeurons vs. HEK293FT"
+  ) +
+  theme_classic() +
+  theme(legend.position = "right") +
+  scale_y_continuous(limits=c(-1.2,0.8), breaks = seq(-1.2,0.8, by =0.2), labels=scales::label_number(accuracy=0.1)) +
+  scale_x_continuous(limits=c(-0.8,0.8), breaks=seq(-0.8,0.8, by=0.2), labels=scales::label_number(accuracy=0.1))
+ggsave(filename ="snvcorr_logFCcutoff_10bcthres.pdf", plot=snvscellcorr, width=5.44, height=4.44, units="in")
+
+res <- cor.test(allsnvs$logFC.neuron, allsnvs$logFC.hek, method = "spearman", exact =FALSE)
+
+res$estimate  # Spearmans's rho = 0.08645348 
+res$p.value   # P-value 1.518072e-15
+
+```
+
+##Graph indels overlap heks and neurons, default filt, implement a logFC absvalue of at least 0.1
+```{r}
+indelsheks <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/heks/bcalm_indels_labeled_heks_10bcthres.tsv")
+indelsneurons <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_indels_labeled_neuronss_10bcthres.tsv")
+
+allindels <- full_join(
+  indelsheks %>% rename_with(~paste0(.x, ".hek"), -element),
+  indelsneurons %>% rename_with(~paste0(.x, ".neuron"), -element),
+  by="element"
+)
+
+allindels <- allindels %>% mutate(sig = case_when(
+  adj.P.Val.hek <=0.05 & adj.P.Val.neuron <= 0.05 & abs(logFC.hek) >= 0.1 & abs(logFC.neuron) >=0.1 ~ "sigboth",
+  adj.P.Val.hek <=0.05 & abs(logFC.hek) >=0.1 ~ "sighek",
+  adj.P.Val.neuron <=0.05 & abs(logFC.neuron) >=0.1 ~ "signeuron",
+  TRUE ~ "ns"
+))
+
+
+allindels$sig <- factor(allindels$sig, 
+                        levels = c("ns", "sighek", "signeuron", "sigboth"))
+
+allindels <- allindels %>%
+  arrange(sig)
+
+indelcellcorr <- ggplot(allindels, aes(x = logFC.hek, y = logFC.neuron, color = sig)) +
+  geom_point(size = 1.5) +
+  scale_color_manual(name="Adj.P.Val & logFC cutoff",
+    values = c(
+      "sigboth"   = "#8332b5",
+      "sighek"    = "#6acfdc",
+      "signeuron" = "#ec5bb4",
+      "ns"        = "#e0e0e0"
+    ),
+    labels = c(
+    "ns"        = "None",
+    "sighek"    = "HEKs",   # or your exact text
+    "signeuron" = "Neurons",
+    "sigboth"   = "HEKs & Neurons"
+  )) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") +
+  labs(
+    x = "HEK293FT logFC",
+    y = "Neuron logFC",
+    title = "InDels \nNeurons vs. HEK293FT"
+  ) +
+  ylim(-0.6,0.4) +
+  theme_classic() +
+  theme(legend.position = "right")
+ggsave(filename="indelcorr_logFCcutoff_10bcthres.pdf", plot=indelcellcorr, width=5.44, height=4.44, units="in")
+
+
+```
+
+##neuron mapt promoter heatmap
+```{r}
+mapt <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_mapt_neurons_10bcthres.tsv")
+
+mapt <- mapt %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < 0 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+mapt <- mapt %>% mutate(position = as.numeric(str_extract(element, "(?<=maptprom_chr17_)[0-9]+")))
+
+bcalmmapt <- ggplot(mapt, aes(x = position, y = allele, fill = sig2)) +
+  geom_tile() +
+  theme_minimal() +  # Use a minimal theme
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    ) +  # Rotate x-axis labels for readability
+    labs(,
+      fill = "active control v variant"
+    ) +
+  scale_fill_manual(values = c(
+    "ns" = "gray85" ,
+    "sig_up" = "tomato",
+    "sig_down" ="dodgerblue"),
+    na.value = "white"
+  )
+ggsave(filename="maptheatmap_bcalm_10bcthres.pdf", plot=bcalmmapt, width=30, height=4.44, units="in")
+
+
+
+
+#implementing a logFC thres of 0.1
+mapt <- mapt %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0.1 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < -0.1 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+bcalmmapt <- ggplot(mapt, aes(x = position, y = allele, fill = sig2, text=position)) +
+  geom_tile() +
+  theme_minimal() +  # Use a minimal theme
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    ) +  # Rotate x-axis labels for readability
+    labs(,
+      fill = "active control v variant"
+    ) +
+  scale_fill_manual(values = c(
+    "ns" = "gray85" ,
+    "sig_up" = "tomato",
+    "sig_down" ="dodgerblue"),
+    na.value = "white"
+  )
+ggsave(filename="maptheatmap_bcalm_10bcthres_logFCcutoff.pdf", plot=bcalmmapt, width=30, height=4.44, units="in")
+
+library(plotly)
+bcalmmaptp <- ggplotly(bcalmmapt, tooltip="text")
+
+htmlwidgets::saveWidget(bcalmmaptp, file = "maptheatmap_bcalm_10bcthres_logFCcutoff.html", selfcontained = TRUE)
+
+
+
+```
+
+##complex heatmap logfc
+```{r}
+# Make sure log2FoldChange is numeric
+mapt$logFC <- as.numeric(mapt$logFC)
+
+# Pivot to wide format
+maptwide <- dcast(mapt, allele ~ position, value.var = "logFC", fill = 0)
+
+posorder <- mapt %>% pull(position) %>% sort()
+posorder <- unique(posorder)
+
+# Desired row order
+alleleorder <- c("E", "B", "C", "D")
+
+# Convert to matrix, set rownames
+mat_matrix <- as.matrix(maptwide[,-1])
+rownames(mat_matrix) <- maptwide$allele
+# Ensure that your allele and position order values exist in the matrix
+# Ensure that your allele and position order values exist in the matrix
+allele_order <- alleleorder[alleleorder %in% rownames(mat_matrix)]
+pos_order <- posorder[posorder %in% colnames(mat_matrix)]
+pos_order <- as.character(pos_order)
+
+
+
+# Reorder the matrix
+mat_matrix_ordered <- mat_matrix[allele_order, pos_order]
+
+col_fun = colorRamp2(c(-0.5,0,0.5), c("dodgerblue", "white", "tomato"))
+
+
+pdf("complexheatmap_maptvarlogfc.pdf", width = 30, height = 4.44)
+Heatmap(mat_matrix_ordered, col=col_fun, cluster_rows=FALSE, cluster_columns=FALSE, border=TRUE)
+dev.off()
+
+
+
+
+
+
+```
+
+##complex heatmap heks maptprom
+```{r}
+library(ComplexHeatmap)
+library(reshape2)
+maptheks <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/heks/bcalm_mapt_heks_10bcsthres.tsv")
+maptheks <- maptheks %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0.1 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < -0.1 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      adj.P.Val <= 0.05 & logFC >= -0.1 & logFC <= 0.1 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+maptheks <- maptheks %>% mutate(position = as.numeric(str_extract(element, "(?<=maptprom_chr17_)[0-9]+")))
+
+
+maptheks$sig2 <- as.character(maptheks$sig2)
+
+# Pivot to wide format on sig2
+mapthekswide <- dcast(maptheks, allele ~ position, value.var = "sig2", fill = NA)
+
+posorder    <- sort(unique(maptheks$position))
+alleleorder <- c("E", "B", "C", "D")
+
+# Convert to matrix and set rownames
+mat_matrix <- as.matrix(mapthekswide[ , -1])
+rownames(mat_matrix) <- as.character(mapthekswide$allele)
+
+# Ensure rows/cols exist
+allele_order <- alleleorder[alleleorder %in% rownames(mat_matrix)]
+pos_order    <- as.character(posorder[posorder %in% colnames(mat_matrix)])
+
+# Reorder matrix
+mat_matrix_ordered <- mat_matrix[allele_order, pos_order]
+
+# Define discrete color mapping
+category_colors <- c(
+  sig_up   = "tomato",
+  sig_down = "dodgerblue",
+  ns       = "gray90"
+)
+
+# Plot heatmap (with NA = white)
+pdf("complexheatmap_maptvar_sig_heks2.pdf", width = 30, height = 4.44)
+Heatmap(
+  mat_matrix_ordered,
+  col     = category_colors,
+  na_col  = "white",
+  cluster_rows    = FALSE,
+  cluster_columns = FALSE,
+  border = TRUE
+)
+dev.off()
+
+
+```
+
+
+##mapt promoter common between cell types
+```{r}
+maptheks_renamed <- maptheks %>%
+  rename_with(~ paste0(.x, ".heks"), .cols = -c(position, allele))
+
+maptcombined <- mapt %>%
+  inner_join(maptheks_renamed, by = c("position", "allele"))
+
+maptcombined <- maptcombined %>% mutate(
+    shared = case_when(
+      sig2 == "sig_up" & sig2.heks == "sig_up" ~ "sig_up",
+      sig2 == "sig_down" & sig2.heks == "sig_down" ~ "sig_down",
+      sig2 == "sig_down" & sig2.heks == "sig_up" ~ "ns",
+      sig2 == "sig_up" & sig2.heks == "sig_down" ~ "ns",
+      sig2 == "sig_up" & sig2.heks == "ns" ~ "ns",
+      sig2 == "sig_down" & sig2.heks == "ns" ~ "ns",
+      sig2 == "ns" & sig2.heks == "sig_up" ~ "ns",
+      sig2 == "ns" & sig2.heks == "sig_down" ~ "ns",
+      sig2 == "ns" & sig2.heks == "ns" ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+maptcombined$shared <- as.character(maptcombined$shared)
+
+# Pivot to wide format on sig2
+maptcombinedwide <- dcast(maptcombined, allele ~ position, value.var = "shared", fill = NA)
+
+posorder    <- sort(unique(maptcombined$position))
+alleleorder <- c("E", "B", "C", "D")
+
+# Convert to matrix and set rownames
+mat_matrix <- as.matrix(maptcombinedwide[ , -1])
+rownames(mat_matrix) <- as.character(maptcombinedwide$allele)
+
+# Ensure rows/cols exist
+allele_order <- alleleorder[alleleorder %in% rownames(mat_matrix)]
+pos_order    <- as.character(posorder[posorder %in% colnames(mat_matrix)])
+
+# Reorder matrix
+mat_matrix_ordered <- mat_matrix[allele_order, pos_order]
+
+# Define discrete color mapping
+category_colors <- c(
+  sig_up   = "tomato",
+  sig_down = "dodgerblue",
+  ns       = "gray90"
+)
+
+# Plot heatmap (with NA = white)
+pdf("complexheatmap_maptvar_shared_heksandneurons.pdf", width = 30, height = 4.44)
+Heatmap(
+  mat_matrix_ordered,
+  col     = category_colors,
+  na_col  = "white",
+  cluster_rows    = FALSE,
+  cluster_columns = FALSE,
+  border = TRUE
+)
+dev.off()
+
+
+```
+
+
+
+##mapt promoter neuron specific
+```{r}
+maptheks_renamed <- maptheks %>%
+  rename_with(~ paste0(.x, ".heks"), .cols = -c(position, allele))
+
+maptcombined <- mapt %>%
+  inner_join(maptheks_renamed, by = c("position", "allele"))
+
+maptcombined <- maptcombined %>% mutate(
+    neuronspecific = case_when(
+      sig2 == "sig_up" & sig2.heks == "sig_up" ~ "ns",
+      sig2 == "sig_down" & sig2.heks == "sig_down" ~ "ns",
+      sig2 == "sig_down" & sig2.heks == "sig_up" ~ "sig_down",
+      sig2 == "sig_up" & sig2.heks == "sig_down" ~ "sig_up",
+      sig2 == "sig_up" & sig2.heks == "ns" ~ "sig_up",
+      sig2 == "sig_down" & sig2.heks == "ns" ~ "sig_down",
+      sig2 == "ns" & sig2.heks == "sig_up" ~ "ns",
+      sig2 == "ns" & sig2.heks == "sig_down" ~ "ns",
+      sig2 == "ns" & sig2.heks == "ns" ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+maptcombined$neuronspecific <- as.character(maptcombined$neuronspecific)
+
+# Pivot to wide format on sig2
+maptcombinedwide <- dcast(maptcombined, allele ~ position, value.var = "neuronspecific", fill = NA)
+
+posorder    <- sort(unique(maptcombined$position))
+alleleorder <- c("E", "B", "C", "D")
+
+# Convert to matrix and set rownames
+mat_matrix <- as.matrix(maptcombinedwide[ , -1])
+rownames(mat_matrix) <- as.character(maptcombinedwide$allele)
+
+# Ensure rows/cols exist
+allele_order <- alleleorder[alleleorder %in% rownames(mat_matrix)]
+pos_order    <- as.character(posorder[posorder %in% colnames(mat_matrix)])
+
+# Reorder matrix
+mat_matrix_ordered <- mat_matrix[allele_order, pos_order]
+
+# Define discrete color mapping
+category_colors <- c(
+  sig_up   = "tomato",
+  sig_down = "dodgerblue",
+  ns       = "gray90"
+)
+
+# Plot heatmap (with NA = white)
+pdf("complexheatmap_maptvar_neuronspecific.pdf", width = 30, height = 4.44)
+Heatmap(
+  mat_matrix_ordered,
+  col     = category_colors,
+  na_col  = "white",
+  cluster_rows    = FALSE,
+  cluster_columns = FALSE,
+  border = TRUE
+)
+dev.off()
+
+
+```
+
+#mapt logfc by base, gain of activity region
+```{r}
+#label base ids
+maptkey <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/fiveallelesmpradesign.tsv")
+mapt <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_mapt_neurons_10bcthres.tsv")
+
+mapt <- mapt %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < 0 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+mapt <- mapt %>% mutate(position = as.numeric(str_extract(element, "(?<=maptprom_chr17_)[0-9]+")))
+
+maptkey <- maptkey %>% filter(str_detect(id, "mapt"))
+maptkey <- maptkey %>% filter(!str_detect(id, "ref"))
+maptkey <- maptkey %>% filter(posControl != TRUE)
+maptkey <- maptkey %>% filter(negControl != TRUE)
+maptkeylong <- maptkey %>% pivot_longer(cols = starts_with("allele"),
+               names_to = "allele",
+               values_to = "present") %>%
+  # keep only rows where that allele is TRUE
+  filter(present) %>%
+  # clean allele column: remove "allele" prefix to just leave A, B, C...
+  mutate(allele = sub("allele", "", allele)) %>%
+  select(-present)
+maptkey_long <- maptkey %>%
+  pivot_longer(cols = starts_with("allele"),
+  names_to = "allele",
+  values_to = "has_allele") %>%
+  filter(has_allele == TRUE) %>%
+  mutate(allele = sub("allele", "", allele))
+
+mapt_with_id <- mapt %>%
+  left_join(
+    maptkey_long %>% select(id, element, allele),
+    by = c("element", "allele")
+  )
+#mapt_with_id <- mapt_with_id %>% filter(allele != "E")
+mapt_with_id <- mapt_with_id %>% separate(id,
+           into = c("prefix", "chr", "pos", "altseq", "base_ref", "to", "base_alt"),
+           sep = "_",
+           remove = FALSE,
+           extra = "merge") %>%
+  select(-prefix, -chr, -pos, -altseq, -to)
+mapt_with_id <- mapt_with_id %>% mutate(base_alt = replace(base_alt, is.na(base_alt), "deletion"))
+mapt_with_id_filt30bp <- mapt_with_id %>% filter(between(position, 45894673, 45894702))
+mapt_with_id_filt30bp <- mapt_with_id_filt30bp %>% arrange(by=adj.P.Val)
+mapt_with_id_filt30bp <- mapt_with_id_filt30bp %>% mutate(sig = case_when(
+  adj.P.Val <=0.05 ~ "sig alt",
+  TRUE ~ "ns"
+))
+mapt_with_id_filt30bp <- mapt_with_id_filt30bp %>%
+  dplyr::mutate(
+    base_alt = factor(base_alt, levels = c("A", "C", "G", "T", "deletion"))
+  )
+mapt_fc30bp <- ggplot(mapt_with_id_filt30bp, aes(fill=base_alt, y=logFC, x=position, alpha=sig)) +
+  geom_bar(position="dodge", stat="identity", width=0.7) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c(
+      "A" = "#1b998b", 
+      "T" = "#ff6347",  
+      "C" = "#5cadff", 
+      "G" = "#fecb34",
+      "deletion" = "gray55"
+    )) +
+  scale_alpha_manual(values=c("ns" = 0.25, "sig alt" = 1)) +
+  geom_hline(yintercept=0)
+ggsave(filename="maptbcalm_logfc_30bases_gainactivity.pdf", plot=mapt_fc30bp, width=15, height=4.44, units="in")
+
+
+mapt_fc30bpogcolors <- ggplot(mapt_with_id_filt30bp, aes(fill=base_alt, y=logFC, x=position, alpha=sig)) +
+  geom_bar(position="dodge", stat="identity", width=0.7) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c(
+      "A" = "#00811b", 
+      "T" = "#d00001",  
+      "C" = "#2000c7", 
+      "G" = "#ffb32c",
+      "deletion" = "gray75"
+    )) +
+  scale_alpha_manual(values=c("ns" = 0.25, "sig alt" = 1)) +
+  geom_hline(yintercept=0)
+ggsave(filename="maptbcalm_logfc_30bases_gainactivityOGcolors.pdf", plot=mapt_fc30bpogcolors, width=15, height=4.44, units="in")
+```
+
+
+##mapt logfc by base, loss of activity region
+```{r}
+#label base ids
+maptkey <- read_tsv("/cluster/home/rhauser/files/rmhex03/design/fiveallelesmpradesign.tsv")
+
+
+maptkey <- maptkey %>% filter(str_detect(id, "mapt"))
+maptkey <- maptkey %>% filter(!str_detect(id, "ref"))
+maptkey <- maptkey %>% filter(posControl != TRUE)
+maptkey <- maptkey %>% filter(negControl != TRUE)
+maptkeylong <- maptkey %>% pivot_longer(cols = starts_with("allele"),
+               names_to = "allele",
+               values_to = "present") %>%
+  # keep only rows where that allele is TRUE
+  filter(present) %>%
+  # clean allele column: remove "allele" prefix to just leave A, B, C...
+  mutate(allele = sub("allele", "", allele)) %>%
+  select(-present)
+maptkey_long <- maptkey %>%
+  pivot_longer(cols = starts_with("allele"),
+  names_to = "allele",
+  values_to = "has_allele") %>%
+  filter(has_allele == TRUE) %>%
+  mutate(allele = sub("allele", "", allele))
+
+mapt_with_id <- mapt %>%
+  left_join(
+    maptkey_long %>% select(id, element, allele),
+    by = c("element", "allele")
+  )
+#mapt_with_id <- mapt_with_id %>% filter(allele != "E")
+mapt_with_id <- mapt_with_id %>% separate(id,
+           into = c("prefix", "chr", "pos", "altseq", "base_ref", "to", "base_alt"),
+           sep = "_",
+           remove = FALSE,
+           extra = "merge") %>%
+  select(-prefix, -chr, -pos, -altseq, -to)
+mapt_with_id <- mapt_with_id %>% mutate(base_alt = replace(base_alt, is.na(base_alt), "deletion"))
+mapt_with_id_filt30bp <- mapt_with_id %>% filter(between(position, 45894270, 45894299))
+mapt_with_id_filt30bp <- mapt_with_id_filt30bp %>% arrange(by=adj.P.Val)
+mapt_with_id_filt30bp <- mapt_with_id_filt30bp %>% mutate(sig = case_when(
+  adj.P.Val <=0.05 ~ "sig alt",
+  TRUE ~ "ns"
+))
+mapt_with_id_filt30bp <- mapt_with_id_filt30bp %>%
+  dplyr::mutate(
+    base_alt = factor(base_alt, levels = c("A", "C", "G", "T", "deletion"))
+  )
+mapt_fc30bp <- ggplot(mapt_with_id_filt30bp, aes(fill=base_alt, y=logFC, x=position, alpha=sig)) +
+  geom_bar(position="dodge", stat="identity", width=0.7) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c(
+      "A" = "#1b998b", 
+      "T" = "#ff6347",  
+      "C" = "#5cadff", 
+      "G" = "#fecb34",
+      "deletion" = "gray55"
+    )) +
+  scale_alpha_manual(values=c("ns" = 0.25, "sig alt" = 1)) +
+  geom_hline(yintercept=0)
+ggsave(filename="maptbcalm_logfc_30bases.pdf", plot=mapt_fc30bp, width=15, height=4.44, units="in")
+
+mapt_fc30bpogcolors <- ggplot(mapt_with_id_filt30bp, aes(fill=base_alt, y=logFC, x=position, alpha=sig)) +
+  geom_bar(position="dodge", stat="identity", width=0.7) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c(
+      "A" = "#00811b", 
+      "T" = "#d00001",  
+      "C" = "#2000c7", 
+      "G" = "#ffb32c",
+      "deletion" = "gray75"
+    )) +
+  scale_alpha_manual(values=c("ns" = 0.25, "sig alt" = 1)) +
+  geom_hline(yintercept=0)
+ggsave(filename="maptbcalm_logfc_30bases_lossactivityOGcolors.pdf", plot=mapt_fc30bpogcolors, width=15, height=4.44, units="in")
+
+
+```
+
+#showing logfc for the dot plots
+```{r}
+
+bricrispr_45971424_45972091 <- ggplot(snvsindels, aes(x=position, y = logFC, color = sig2 )) +
+  geom_point(size=3) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85" ,
+    "sig_up" = "tomato",
+    "sig_down" ="dodgerblue"),
+    na.value = "white"
+  ) +
+  coord_cartesian(xlim = c(45971424, 45972091), ylim=c(-0.5,0.5))
+ggsave(filename="bricrispr_45971424_45972091_logfc.pdf", plot=bricrispr_45971424_45972091, width=10, height=2.22, units="in")
+
+
+
+snvsindels <- snvsindels %>% mutate(
+    snpID = str_replace(
+      element,
+      ".*?(chr[0-9XYM]+)_([0-9]+)_(?:altseq_)?([A-Za-z]+)_to_([A-Za-z]+)$",
+      "\\1:\\2:\\3:\\4"
+    )
+  )
+snvsindels <- snvsindels %>%
+  mutate(sig2 = factor(sig2, levels = c("ns", "sig_down", "sig_up"))) %>%
+  arrange(sig2)
+
+bricrispr_45971424_45972091 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45971424, 45972091), ylim = c(-0.25, 0.25)) +
+  scale_x_continuous(breaks=c(45971424, 45972091), labels=c("45971424", "45972091"))
+ggsave(filename="bricrispr_45971424_45972091_logfc.pdf", plot=bricrispr_45971424_45972091, width=10, height=2.22, units="in")
+
+bricrispr_45942082_45942750 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45942082, 45942750), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(45942082, 45942750), labels=c("45942082", "45942750"))
+ggsave(filename="bricrispr_45942082_45942750_logfc.pdf", plot=bricrispr_45942082_45942750, width=10, height=2.22, units="in")
+
+
+bricrispr_45940685_45941352 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45940685, 45941352), ylim=c(-0.3,0.3)) +
+  scale_x_continuous(breaks=c(45940685, 45941352), labels=c("45940685", "45941352"))
+ggsave(filename="bricrispr_45940685_45941352_logfc.pdf", plot=bricrispr_45940685_45941352, width=10, height=2.22, units="in")
+
+bricrispr_45873488_45874156 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45873488, 45874156), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(45873488, 45874156), labels=c("45873488", "45874156"))
+ggsave(filename="bricrispr_45873488_45874156_logfc.pdf", plot=bricrispr_45873488_45874156, width=10, height=2.22, units="in")
+
+
+bricrispr_45848303_45849886 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45848303, 45849886), ylim=c(-0.25,0.25)) +
+  scale_x_continuous(breaks=c(45848303, 45849886), labels=c("45848303", "45849886"))
+ggsave(filename="bricrispr_45848303_45849886_logfc.pdf", plot=bricrispr_45848303_45849886, width=10, height=2.22, units="in")
+
+bricrispr_45431444_45432656 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45431444, 45432656), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(45431444, 45432656), labels=c("45431444", "45432656"))
+ggsave(filename="bricrispr_45431444_45432656_logfc.pdf", plot=bricrispr_45431444_45432656, width=10, height=2.22, units="in")
+
+bricrispr_45428787_45429857 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45428787, 45429857), ylim=c(-0.3,0.3)) +
+    scale_x_continuous(breaks=c(45428787, 45429857), labels=c("45428787", "45429857"))
+ggsave(filename="bricrispr_45428787_45429857_logfc.pdf", plot=bricrispr_45428787_45429857, width=10, height=2.22, units="in")
+
+bricrispr_45309210_45309877 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45309210, 45309877), ylim=c(-0.25,0.25)) +
+  scale_x_continuous(breaks=c(45309210, 45309877), labels=c("45309210", "45309877"))
+ggsave(filename="bricrispr_45309210_45309877_logfc.pdf", plot=bricrispr_45309210_45309877, width=10, height=2.22, units="in")
+
+bricrispr_45240986_45242338 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45240986, 45242338), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(45240986, 45242338), labels=c("45240986", "45242338"))
+ggsave(filename="bricrispr_45240986_45242338_logfc.pdf", plot=bricrispr_45240986_45242338, width=10, height=2.22, units="in")
+
+bricrispr_45219148_45219936 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45219148, 45219936), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(45219148, 45219936), labels=c("45219148", "45219936"))
+ggsave(filename="bricrispr_45219148_45219936_logfc.pdf", plot=bricrispr_45219148_45219936, width=10, height=2.22, units="in")
+
+
+region5 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45821000, 45823000), ylim=c(-0.25,0.25)) +
+  scale_x_continuous(breaks=c(45821000, 45823000), labels=c("45821000", "45823000"))
+ggsave(filename="crispr_region5_logfc.pdf", plot=region5, width=10, height=2.22, units="in")
+
+region18 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45780724, 45781806), ylim=c(-0.25,0.25)) +
+  scale_x_continuous(breaks=c(45780724, 45781806), labels=c("45780724", "45781806"))
+ggsave(filename="crispr_region18_logfc.pdf", plot=region18, width=10, height=2.22, units="in")
+
+region9 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(46037318, 46038610), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(46037318, 46038610), labels=c("46037318", "46038610"))
+ggsave(filename="crispr_region9_logfc.pdf", plot=region9, width=10, height=2.22, units="in")
+
+
+region8 <- ggplot(snvsindels, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(46029900, 46031100), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(46029900, 46031100), labels=c("46029900", "46031100"))
+ggsave(filename="crispr_region8_logfc.pdf", plot=region8, width=10, height=2.22, units="in")
+
+#add in MAPT SNVs in ADSP
+variantcounts <- read_tsv("/cluster/home/rhauser/files/rmhex03/variantinfo/variantinfo.tsv")
+variantcounts <- variantcounts %>% rename("snpID" = "SNP")
+variantcounts <- variantcounts %>%
+  mutate(snpID = paste0("chr", snpID))
+maptlabeled <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_mapt_neurons_10bcthres_withlabels.tsv")
+#remove 5bp deletion
+maptlabeled <- maptlabeled %>% filter(allele != "E")
+maptlabeled <- maptlabeled %>% mutate(
+    snpID = str_replace(
+      id,
+      ".*?(chr[0-9XYM]+)_([0-9]+)_altseq[0-9]*_([A-Za-z]+)_to_([A-Za-z]+)$",
+      "\\1:\\2:\\3:\\4"
+    )
+  )
+
+
+ADSPmaptpromsnvs <- maptlabeled %>% inner_join(variantcounts, by="snpID")
+ADSPmaptpromsnvs_labels <- ADSPmaptpromsnvs %>% select(snpID, CHR, pos, base_ref, base_alt)
+ADSPmaptpromsnvs_labels <- ADSPmaptpromsnvs_labels %>% arrange(by=pos)
+write_tsv(ADSPmaptpromsnvs_labels, "MAPTpromoterADSPvariants.tsv")
+
+ADSPmaptpromsnvs <- ADSPmaptpromsnvs %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < 0 ~ "sig_down",
+      #adj.P.Val > 0.05 ~ "ns",
+      TRUE    ~ "ns"  # Fallback if none are TRUE
+    ))
+write_tsv(ADSPmaptpromsnvs, "ADSPmaptpromsnvs.tsv")
+
+
+ADSPmaptpromsnvs <- ADSPmaptpromsnvs %>% rename("position" = "pos")
+ADSPmaptpromsnvs <- ADSPmaptpromsnvs %>% select(element, logFC, AveExpr, t, P.Value, adj.P.Val, B, position, sig2, snpID)
+snvsindels <- snvsindels %>% select(!group)
+snvsindels2 <- rbind(snvsindels, ADSPmaptpromsnvs)
+
+snvsindels2 <- snvsindels2 %>% mutate(sig2 = factor(sig2, levels = c("ns", "sig_down", "sig_up"))) %>%
+  arrange(sig2)
+
+
+maptindels <- ggplot(snvsindels2, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  geom_text(
+    aes(label = ifelse(sig2 %in% c("sig_up", "sig_down"), snpID, "")),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45893536, 45895535), ylim=c(-0.3,0.3)) +
+  scale_x_continuous(breaks=c(45893536, 45895535), labels=c("45893536", "45895535"))
+ggsave(filename="mapt_ADSPvars.pdf", plot=maptindels, width=10, height=2.22, units="in")
+
+
+
+#filter out AC of 0
+variantcounts <- variantcounts %>%
+  filter(AD_minorCount != 0 & CTL_minorCount != 0)
+
+ADSPmaptpromsnvs <- maptlabeled %>% inner_join(variantcounts, by="snpID")
+ADSPmaptpromsnvs_labels <- ADSPmaptpromsnvs %>% select(snpID, CHR, pos, base_ref, base_alt)
+ADSPmaptpromsnvs_labels <- ADSPmaptpromsnvs_labels %>% arrange(by=pos)
+write_tsv(ADSPmaptpromsnvs_labels, "MAPTpromoterADSPvariants.tsv")
+
+ADSPmaptpromsnvs <- ADSPmaptpromsnvs %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < 0 ~ "sig_down",
+      #adj.P.Val > 0.05 ~ "ns",
+      TRUE    ~ "ns"  # Fallback if none are TRUE
+    ))
+write_tsv(ADSPmaptpromsnvs, "ADSPmaptpromsnvs.tsv")
+
+
+ADSPmaptpromsnvs <- ADSPmaptpromsnvs %>% rename("position" = "pos")
+ADSPmaptpromsnvs <- ADSPmaptpromsnvs %>% select(element, logFC, AveExpr, t, P.Value, adj.P.Val, B, position, sig2)
+#snvsindels <- snvsindels %>% select(!group)
+snvsindels2 <- rbind(snvsindels, ADSPmaptpromsnvs)
+
+snvsindels2 <- snvsindels2 %>% mutate(sig2 = factor(sig2, levels = c("ns", "sig_down", "sig_up"))) %>%
+  arrange(sig2)
+
+
+maptindels <- ggplot(snvsindels2, aes(x = position, y = logFC, color = sig2)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "ns" = "gray85",
+    "sig_up" = "tomato",
+    "sig_down" = "dodgerblue"
+  ),
+  na.value = "white") +
+  coord_cartesian(xlim = c(45893536, 45895535), ylim=c(-0.3,0.3)) +
+  scale_x_continuous(breaks=c(45893536, 45895535), labels=c("45893536", "45895535"))
+ggsave(filename="mapt_ADSPvars_noAC0.pdf", plot=maptindels, width=10, height=2.22, units="in")
+
+
+```
+
+#BrainTF
+```{r}
+library(GenomicRanges)
+library(ggrepel)
+library(rtracklayer)
+
+#read in data
+union_files<-as.list(readLines("/cluster/home/aanderson/myers/BrainTF/path_to_unlist_csv.txt"))
+m=gsub(".csv","", unlist(union_files))
+m=sapply(strsplit(m, "/"),`[`,8)
+
+peaks<-c()
+union_list=lapply(union_files,function(x){
+  tmp<-GRanges(read.csv(x))
+ # peaks<-c(peaks, length(tmp[which(tmp$name=="NFIC"),]))
+})
+
+peaks<-do.call(c, union_list)
+peaks<-peaks[order(-width(peaks)),]
+
+Pileup_wName <- function(object, region, highlight_names = NULL) {
+  peaks_df <- as.data.frame(subsetByOverlaps(object, region))
+  peaks_df$tag <- paste0(peaks_df$name, "-", peaks_df$type)
+  peaks_df <- peaks_df[!duplicated(peaks_df$tag), ]
+  
+  # Clip partially overlapping peaks so that they fit within the region
+  peaks_df$start <- pmax(peaks_df$start, start(region))
+  peaks_df$end   <- pmin(peaks_df$end, end(region))
+
+  # Set IRanges for overlap staggering
+  peak_ranges <- IRanges(start = peaks_df$start, end = peaks_df$end)
+  overlap_levels <- disjointBins(peak_ranges)
+  peaks_df$y_level <- overlap_levels
+
+  # Label certain names if requested
+  peaks_df$label <- if (!is.null(highlight_names)) {
+    ifelse(peaks_df$name %in% highlight_names, peaks_df$name, "")
+  } else {
+    ""
+  }
+
+  # Build plot
+  p <- ggplot(peaks_df) +
+    geom_segment(aes(x = start, xend = end, y = y_level, yend = y_level, color = type), size = 3) +
+    geom_text_repel(
+      data = subset(peaks_df, label != ""),
+      aes(x = (start + end) / 2, y = y_level, label = label),
+      size = 3,
+      box.padding = 0.3,
+      point.padding = 0.2,
+      segment.color = "grey50",
+      max.overlaps = 100
+    ) +
+    theme_classic()+
+    scale_y_continuous(name = "Overlap Level") +
+    xlab(paste0(as.character(seqnames(region)), " position (bp)")) +
+    xlim(c(start(region), end(region))) +
+    geom_vline(xintercept = c(45893336, 45895735))  +
+    ylim(c(0, 40)) +
+    theme(legend.position = "none")
+
+  return(p)
+}
+
+region2<-GRanges("chr17:45893336-45895735")
+p1 <- Pileup_wName(peaks[which(peaks$type=="NEUN"),], region2)
+ggsave("MAPTpromoter_brainTF_neun.pdf", plot=p1, height=2.22, width=10)
+
+
+peaks
+
+```
+
+#boxplots of vars of interest
+```{r}
+neuroncounts <- read_tsv("/cluster/home/rhauser/MPRAsnakeflow/results/experiments/rmhex03Count/reporter_experiment.barcode.Neurons.fromFile.default.min_oligo_threshold_10.tsv")
+
+merged_neuroncounts <- neuroncounts %>%
+  select(-barcode) %>%
+  group_by(oligo_name) %>%
+  summarise(across(everything(), \(x) sum(x, na.rm = TRUE))) %>%
+  ungroup()
+
+merged_neuroncounts_filt <- merged_neuroncounts %>%
+  filter(
+    dna_count_1 >= 50,
+    dna_count_2 >= 50,
+    dna_count_3 >= 50,
+    dna_count_4 >= 50
+  )
+
+#ratios for RNA:DNA ratio calc neurons
+#rep 1 lines in RNA: 4518933728, lines in DNA: 2091153840, 2.160976224 multiplier
+#rep 2 lines in RNA: 4603339708, lines in DNA: 1907240732, 2.41361231 multiplier 
+#rep 3 lines in RNA: 4452619052, lines in DNA: 1596127992, 2.789637845 multiplier
+#rep 4 lines in RNA: 4839694712, lines in DNA: 1698000164, 2.850232182 multiplier
+
+merged_neuroncounts_rnadna <- merged_neuroncounts %>% mutate(rnadna1 = ((rna_count_1/2.160976224)/dna_count_1),
+                                                             rnadna2 = ((rna_count_2/2.41361231)/dna_count_2),
+                                                             rnadna3 = ((rna_count_3/2.789637845)/dna_count_3),
+                                                             rnadna4 = ((rna_count_3/2.850232182)/dna_count_4))
+
+merged_neuroncounts_rnadna <- merged_neuroncounts_rnadna %>%
+  mutate(mean_rnadna = rowMeans(across(c(rnadna1, rnadna2, rnadna3, rnadna4)), na.rm = TRUE))
+
+merged_neuroncounts_rnadna <- merged_neuroncounts_rnadna %>% mutate(log2rnadna = log2(mean_rnadna))
+merged_neuroncounts_rnadna <- merged_neuroncounts_rnadna %>% rename("label" = "oligo_name")
+
+chr17_45894776 <- merged_neuroncounts_rnadna %>% filter(str_detect(label, "45894776"))
+chr17_45894776 <- chr17_45894776 %>%
+  # filter rows where “45894776” appears in label
+  filter(str_detect(label, "45894776")) %>%
+  # add ‘group’ column
+  mutate(
+    group = case_when(
+      str_detect(label, "_altseq\\d+_([A-Z])_to_([A-Z])$") ~ str_extract(label, "_altseq\\d+_([A-Z])_to_([A-Z])$") %>%
+                                                 str_remove("_altseq\\d+_") %>%
+                                                 str_replace("_to_", ":"),
+      str_detect(label, "_deletion$")       ~ "deletion",
+      str_detect(label, "_referenceseq$")   ~ "reference",
+      TRUE                                   ~ NA_character_
+    )
+  )
+
+chr17_45894776 <- chr17_45894776 %>%
+  pivot_longer(
+    cols = c(rnadna1, rnadna2, rnadna3, rnadna4),
+    names_to = "rnadna_source",     # optional: to keep track where it came from
+    values_to = "rnadna"            # this will be your single column of values
+  )
+
+
+chr17_45894776 <- chr17_45894776 %>% mutate(group = factor(group, levels = c("reference", "G:A", "G:C", "G:T", "deletion"))) %>%
+  arrange(group)
+
+
+chr17_45894776plot <- ggplot(chr17_45894776, aes(x=group, y=rnadna)) +
+  theme_classic() +
+stat_boxplot(geom = "errorbar", width = 0.3, lwd=1.2, color=c("#d3d3d3", "#ca57ff", "#ff78c6", "#ff78c6", "#ff78c6")) +
+    geom_boxplot(fill=c("#e0e0e0", "#d270ff", "#ff91d1", "#ff91d1", "#ff91d1"), color=c("#d3d3d3", "#ca57ff", "#ff78c6", "#ff78c6", "#ff78c6"), lwd=1.2) +
+stat_summary(
+    fun = median, 
+    geom = "crossbar", 
+    width = 0.7, 
+    color = "white", 
+    linewidth = 0.7
+  )
+
+ggsave(filename="rs11575896_rnadna.pdf", plot=chr17_45894776plot , width=4, height=4, units="in")
+
+
+
+```
+
+#alligning alphagenome, promoterai, and mpradata 2
+```{r}
+promai <- read_tsv("/cluster/home/rhauser/files/rmhex03/AIfromHenry/promoterAI_promoter_mutagenesis_results.tsv")
+alphagenomeprom <- read_csv("/cluster/home/rhauser/files/rmhex03/AIfromHenry/alphagenome_mapt_promoter_mutagenesis_glut.csv")
+overlapup <- read_csv("/cluster/home/rhauser/files/rmhex03/AIfromHenry/maptprom_snvs_up_overlap.csv")
+overlapdown <- read_csv("/cluster/home/rhauser/files/rmhex03/AIfromHenry/maptprom_snvs_down_overlap.csv")
+maptlabeled <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_mapt_neurons_10bcthres_withlabels.tsv")
+#remove 5bp deletion
+maptlabeled <- maptlabeled %>% filter(allele != "E")
+maptlabeled <- maptlabeled %>% mutate(
+    snpID = str_replace(
+      id,
+      ".*?(chr[0-9XYM]+)_([0-9]+)_altseq[0-9]*_([A-Za-z]+)_to_([A-Za-z]+)$",
+      "\\1:\\2:\\3:\\4"
+    )
+  )
+
+maptlabeled <- maptlabeled %>% select(pos, base_ref, base_alt, adj.P.Val, logFC)
+#maptlabeled <- maptlabeled %>% rename("BCALM_adjPVal" = "adj.P.Val")
+#maptlabeled <- maptlabeled %>% rename("BCALM_logFC" = "logFC")
+
+promai <- promai %>% select(pos, ref, alt, score)
+promai <- promai %>% dplyr::rename("base_ref" = "ref")
+promai <- promai %>% rename("base_alt" = "alt")
+promai <- promai %>% rename("PromAIScore" = "score")
+
+alphagenomeprom <- alphagenomeprom %>% select(pos, base_ref, base_alt, raw_score)
+alphagenomeprom <- alphagenomeprom %>% rename("AlphaGenome_rawScore" = "raw_score")
+
+merged_up <- overlapup %>%
+  inner_join(maptlabeled, by = c("pos", "base_alt", "base_ref")) %>%
+  inner_join(promai, by = c("pos", "base_alt", "base_ref")) %>%
+  inner_join(alphagenomeprom, by = c("pos", "base_alt", "base_ref"))
+merged_down <- overlapdown %>% 
+  inner_join(maptlabeled, by = c("pos", "base_alt", "base_ref")) %>%
+  inner_join(promai, by = c("pos", "base_alt", "base_ref")) %>%
+  inner_join(alphagenomeprom, by = c("pos", "base_alt", "base_ref"))
+write_tsv(merged_up, "/cluster/home/rhauser/files/rmhex03/AIfromHenry/merged_allup.tsv")
+
+write_tsv(merged_down, "/cluster/home/rhauser/files/rmhex03/AIfromHenry/merged_alldown.tsv")
+
+merged_all <- rbind(merged_up, merged_down)
+
+library(htmlwidgets)
+library(plotly)
+library(ggrepel)
+merged_all <- merged_all %>%
+  mutate(snp = paste("chr17", pos, base_ref, base_alt, sep = ":"))
+merged_all <- merged_all %>% arrange(by=abs(BCALM_logFC))
+
+
+compare <- ggplot(merged_all, aes(x=PromAIScore, y=AlphaGenome_rawScore, color = BCALM_logFC, text=snp)) +
+  geom_point() +
+  theme_classic() +
+  scale_color_gradient2(low = "dodgerblue", mid = "white", high = "tomato", midpoint = 0, limits = c(-0.65, 0.65))+
+  coord_cartesian(xlim = c(-0.9,0.9), ylim=c(-0.17,0.17)) 
+
+ggsave(compare, file="alphagenome_promai_bcalm_directionagree.pdf", height=4, width=5)
+    
+
+compare_p <- ggplotly(compare, tooltip="text")
+
+htmlwidgets::saveWidget(compare_p, file = "alphagenome_promai_bcalm_directionagree.html", selfcontained = TRUE)
+
+
+merged_all <- maptlabeled %>% inner_join(alphagenomeprom, by = c("pos", "base_ref", "base_alt"))
+merged_all <- merged_all %>% inner_join(promai, by = c("pos", "base_ref", "base_alt"))
+
+merged_all <- merged_all %>%
+  mutate(
+    group = case_when(
+      # --- PromAIScore == 0 cases ---------------------------------------------
+      PromAIScore == 0 & (
+        (logFC > 0  & AlphaGenome_rawScore > 0) |
+        (logFC < 0  & AlphaGenome_rawScore < 0)
+      ) ~ "one_agree",
+
+      PromAIScore == 0 & (
+        (logFC > 0 & AlphaGenome_rawScore < 0) |
+        (logFC < 0 & AlphaGenome_rawScore > 0)
+      ) ~ "no_agree",
+
+      # --- Regular cases (nonzero PromAIScore) --------------------------------
+      (logFC > 0 & AlphaGenome_rawScore < 0 & PromAIScore < 0) |
+      (logFC < 0 & AlphaGenome_rawScore > 0 & PromAIScore > 0) ~ "no_agree",
+
+      (logFC > 0 & AlphaGenome_rawScore > 0 & PromAIScore > 0) |
+      (logFC < 0 & AlphaGenome_rawScore < 0 & PromAIScore < 0) ~ "all_agree",
+
+      (logFC > 0 & ((AlphaGenome_rawScore > 0 & PromAIScore < 0) |
+                    (AlphaGenome_rawScore < 0 & PromAIScore > 0))) |
+      (logFC < 0 & ((AlphaGenome_rawScore < 0 & PromAIScore > 0) |
+                    (AlphaGenome_rawScore > 0 & PromAIScore < 0))) ~ "one_agree",
+
+      TRUE ~ "missing"
+    )
+  )
+merged_all <- merged_all %>% mutate(
+    sig = case_when(
+      adj.P.Val <= 0.05 ~ "sig",
+      TRUE ~ "ns"))
+
+merged_all  <- merged_all  %>%
+  mutate(
+    snp = paste0("chr17:", pos, ":", base_ref, ":", base_alt)
+  )
+merged_all <- merged_all %>% filter(!is.na(logFC))
+merged_all <- merged_all %>%
+  mutate(group = factor(group, levels = c("all_agree", "one_agree", "no_agree")))
+merged_all <- merged_all %>%
+    mutate(
+    region = case_when(
+      pos %in% c(45894271, 45894272, 45894273, 45894275, 45894277, 45894278,
+                 45894279, 45894288, 45894289, 45894290, 45894291, 45894293,
+                 45894294, 45894295, 45894296, 45894297) ~ "down",
+      pos %in% c(45894685, 45894686, 45894687, 45894688, 45894689,
+                 45894690, 45894691) ~ "up",
+      TRUE ~ "other"
+    )
+  )
+merged_all <- merged_all %>%
+  mutate(region = factor(region, levels = c("down", "up", "other")))
+
+compare <- ggplot(merged_all, aes(x = PromAIScore,
+                                  y = AlphaGenome_rawScore,
+                                  text = snp)) +
+  # Base layer: non-significant points (gray)
+  geom_point(
+    data = subset(merged_all, sig == "ns"),
+    color = "gray",
+    size = 2) +
+  # Significant points: logFC fill (plasma), outline by region
+  geom_point(
+    data = subset(merged_all, sig == "sig"),
+    aes(color = logFC),
+    size = 2)+
+  # Fill gradient by logFC
+  scale_color_viridis_c(option = "plasma") +
+  theme_classic() +
+  facet_wrap(~group)
+
+ggsave(compare, file="alphagenome_promai_bcalm_all.pdf", height=4, width=11)
+library(plotly)
+compare_p <- ggplotly(compare, tooltip="text")
+htmlwidgets::saveWidget(compare_p, file = "alphagenome_promai_bcalm_all.html", selfcontained = TRUE)
+
+
+compare <- ggplot(merged_all, aes(x = PromAIScore,
+                                  y = AlphaGenome_rawScore,
+                                  text = snp)) +
+  # Base layer: non-significant points (gray)
+  geom_point(
+    data = subset(merged_all, sig == "ns"),
+    color = "gray",
+    size = 2) +
+  # Significant points: logFC fill (plasma), outline by region
+  geom_point(
+    data = subset(merged_all, sig == "sig"),
+    aes(color = region),
+    size = 2)+
+  # Fill gradient by logFC
+  scale_color_manual(values=c(down = "dodgerblue", up="tomato", other="#261823")) +
+  theme_classic() +
+  facet_wrap(~group)
+
+#ggsave(compare, file="alphagenome_promai_bcalm_all_region.pdf", height=4, width=11)
+
+install.packages("ggpubr")
+library(ggpubr)
+
+compare <- ggplot(merged_all, aes(x=PromAIScore, y=logFC)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_classic() +
+  stat_cor(aes(label = after_stat(rr.label)), color = "red", geom = "label")
+ggsave(compare, file="promaiVsMPRA.pdf", height=4, width=4)
+
+res <- cor.test(merged_all$PromAIScore, merged_all$logFC, method = "spearman", exact =FALSE)
+
+res$estimate  # Spearmans's rho = 0.04819852
+res$p.value   # P-value 0.0001892385
+
+compare <- ggplot(merged_all, aes(x=AlphaGenome_rawScore, y=logFC)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_classic() +
+  stat_cor(aes(label = after_stat(rr.label)), color = "red", geom = "label")
+ggsave(compare, file="alphaGenomeVsMPRA.pdf", height=4, width=4)
+
+res <- cor.test(merged_all$AlphaGenome_rawScore, merged_all$logFC, method = "spearman", exact = FALSE)
+
+res$estimate  # Spearmans's rho 0.02767953
+res$p.value   # P-value 0.03211802
+
+compare <- ggplot(merged_all%>%filter(adj.P.Val<=0.05), aes(x=PromAIScore, y=logFC)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_classic() +
+  stat_cor(aes(label = after_stat(rr.label)), color = "red", geom = "label")
+ggsave(compare, file="promaiVsMPRAonlysig.pdf", height=4, width=4)
+
+sig_data <- merged_all %>% dplyr::filter(adj.P.Val <= 0.05)
+
+res <- cor.test(sig_data$PromAIScore, sig_data$logFC, method = "spearman", exact = FALSE)
+
+r<-res$estimate  # Spearmans's rho r 0.2923967 
+res$p.value   # p-value 1.102299e-09
+
+compare <- ggplot(merged_all%>%filter(adj.P.Val<=0.05), aes(x=AlphaGenome_rawScore, y=logFC)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_classic() +
+  stat_cor(aes(label = after_stat(rr.label)), color = "red", geom = "label")
+ggsave(compare, file="AlphaGenomeVsMPRAonlysig.pdf", height=4, width=4)
+
+sig_data <- merged_all %>% dplyr::filter(adj.P.Val <= 0.05)
+
+res <- cor.test(sig_data$AlphaGenome_rawScore, sig_data$logFC, method = "spearman", exact = FALSE)
+
+res$estimate  # Spearmans's rho 0.1622406
+res$p.value   # p-value 0.0008710601
+
+compare <- ggplot(merged_all, aes(x=AlphaGenome_rawScore, y=PromAIScore)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_classic() +
+  stat_cor(aes(label = after_stat(rr.label)), color = "red", geom = "label")
+ggsave(compare, file="AlphaGenomeVsPromAI.pdf", height=4, width=4)
+
+res <- cor.test(merged_all$AlphaGenome_rawScore, merged_all$PromAIScore, method = "spearman", exact = FALSE)
+
+res$estimate  # Spearmans's rho 0.153362  
+#rsquare <- r^2 #0.1288706 
+res$p.value   # p-value 7.177675e-33
+```
+
+#redo of motifbreakr graphs with new seq
+```{r}
+
+mymotifs <- readRDS("/cluster/home/rhauser/files/rmhex03/motifbreakr/motifbreakr_SNVs_results.rds")
+library(motifbreakR)
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+mymotifs_tib <- as_tibble(mymotifs)
+write_tsv(mymotifs_tib, "/cluster/home/rhauser/files/rmhex03/motifbreakr/motifbreakr_SNVs_results.tsv")
+
+strongmotifs <- mymotifs[mymotifs$effect == "strong"]
+mypromoter <- GRanges(seqnames="chr17", ranges=IRanges(start=c(45894158), end=c(45894411)))
+
+strongprommotifs <- strongmotifs[strongmotifs %over% mypromoter]
+strongprommotifsneg <- strongprommotifs[strongprommotifs$alleleEffectSize < 0]
+
+pdf(file="chr17_45894294_G_A.pdf", width = 4.44, height = 10, onefile=FALSE)
+maptmotif1 <- plotMB(strongprommotifsneg, rsid = "chr17:45894294:G:A", effect="strong")
+dev.off()
+
+
+strongprom_genes_counts <- table(mcols(strongprommotifs)$geneSymbol) %>% sort()
+
+strongprommotifs_tib <- as_tibble(strongprommotifs)
+mymotifs_tib <- as_tibble(mymotifs)
+
+maptlabeled$chr <- "chr17"
+maptlabeled_snvid <- maptlabeled %>%
+  mutate(snvid = paste0(chr, ":", pos, ":", base_ref, ":", base_alt))
+
+#filter for only a negative motif breaker effect
+strongprommotifs_tibdown <- strongprommotifs_tib %>% filter(alleleEffectSize < 0)
+mymotifs_tibdown <- mymotifs_tib %>% filter(alleleEffectSize < 0)
+
+#filter for only in loss of activity region
+maptlabeled_snvidfilt <- maptlabeled_snvid %>% filter(between(pos, 45894271, 45894297)) %>% arrange(by=pos)
+maptlabeled_snvidfilt <- maptlabeled_snvidfilt %>% filter(adj.P.Val <= 0.05)
+maptlabeled_snvidfilt <- maptlabeled_snvidfilt %>% filter(logFC <0)
+strongprommotifs_tibdown_filtered <- strongprommotifs_tibdown %>%
+  filter(SNP_id %in% maptlabeled_snvidfilt$snvid)
+strongprommotifs_tibdown_filtered_count <- strongprommotifs_tibdown_filtered %>%
+  count(geneSymbol, name = "count")
+mymotifs_filtered <- mymotifs_tibdown %>%
+  filter(SNP_id %in% maptlabeled_snvidfilt$snvid)
+
+
+mymotifs_filtered_count <- mymotifs_filtered  %>%
+  count(geneSymbol, name = "count")
+
+
+#get motif group names
+motifgroups <- read_tsv("/cluster/home/aanderson/myers/scAnalysis/JASPAR/clusters_motif_names.tab", col_names=c("group", "TFlist"))
+motifgroups <- motifgroups %>%
+  mutate(TFlist = as.character(TFlist))
+motifgroups2 <-motifgroups %>%  separate_rows(TFlist, sep = ",") %>%
+  mutate(TFlist = gsub("::", "_", TFlist))
+motifgroups2 <- motifgroups2 %>% dplyr::rename(TFgroup = group)
+motifgroups2 <- motifgroups2 %>% dplyr::rename(geneSymbol = TFlist)
+
+
+#add motifgroups
+motifgroups2_aggregated <- motifgroups2 %>%
+  group_by(geneSymbol) %>%
+  summarise(TFgroup = paste(unique(TFgroup), collapse = ", "), .groups = "drop")
+prommotifsjoin <- left_join(strongprommotifs_tibdown_filtered_count, motifgroups2_aggregated, by = "geneSymbol")
+
+strongprommotifs_tibdown_filtered2 <- left_join(strongprommotifs_tibdown_filtered, motifgroups2_aggregated, by="geneSymbol")
+write_tsv(strongprommotifs_tibdown_filtered2, "/cluster/home/rhauser/MotifbreakerResults.tsv")
+
+tfbar <- ggplot(prommotifsjoin, aes(x=count, y=reorder(geneSymbol, count), fill=TFgroup)) +
+  geom_col() +
+  theme_classic() +
+  labs(y="Transcription Factor Binding Sites")
+ggsave(filename="/cluster/home/rhauser/files/graphs/paperfigures/newvariantplots/TFs_bcalm_down_strongnegeffect_onlydownregion_newseq.pdf", plot=tfbar, width=5.44, height=5.44, units="in")
+
+prommotifsjoin_alldown <- left_join(mymotifs_filtered_count, motifgroups2_aggregated, by = "geneSymbol")
+tfbar <- ggplot(prommotifsjoin_alldown, aes(x=count, y=reorder(geneSymbol, count), fill=TFgroup)) +
+  geom_col() +
+  theme_classic() +
+  labs(y="Transcription Factor Binding Sites")
+ggsave(filename="/cluster/home/rhauser/files/graphs/paperfigures/newvariantplots/TFs_bcalm_down_strongandweaknegeffect_onlydownregion_newseq.pdf", plot=tfbar, width=5.44, height=5.44, units="in")
+
+
+tfbar <- ggplot(prommotifsjoin, aes(x=count, y=reorder(geneSymbol, count), fill=TFgroup)) +
+  geom_col() +
+  theme_classic() +
+  scale_fill_manual(values=c("#6acfdc", "#ec5bb4")) +
+  labs(y="Transcription Factor Binding Sites")
+ggsave(filename="/cluster/home/rhauser/files/graphs/paperfigures/newvariantplots/TFs_bcalm_down_strongnegeffect_onlydownregion_newseq_newcolors.pdf", plot=tfbar, width=5, height=5.44, units="in")
+
+
+```
+
+
+
+#spliceAI scores
+```{r}
+spliceai <- read_tsv("/cluster/home/rhauser/files/rmhex03/spliceAI/spliceAIscores_promupregion.tsv")
+spliceai_donor <- spliceai %>% select(POS, REF, ALT, DonorLoss, DonorGain)
+spliceai_donor_long <- spliceai_donor %>% pivot_longer(cols = c("DonorLoss", "DonorGain"), names_to="Type", values_to = "Score")
+
+
+spliceaifig <- ggplot(spliceai_donor_long , aes(fill=ALT, y=Score, x=POS)) +
+  geom_bar(position="dodge", stat="identity", width=0.7) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c(
+      "A" = "#1b998b", 
+      "T" = "#ff6347",  
+      "C" = "#5cadff", 
+      "G" = "#fecb34"
+    )) +
+  geom_hline(yintercept=0) +
+  facet_wrap(~Type)
+ggsave(filename="spliceAIfig.pdf", plot=spliceaifig, width=15, height=4.44, units="in")
+```
+
+#rs11575896
+```{r}
+ancestry <- read_tsv("/cluster/home/rhauser/files/rmhex03/variantinfo/frq_outputs/summary.txt")
+ancestry_long <- ancestry %>% pivot_longer(cols = c("AlleleFreq_AD", "AlleleFreq_nonAD"), names_to="Group", values_to = "AlleleFreq")
+
+#order factors
+ancestry_long <- ancestry_long %>%
+  mutate(
+    Ancestry = factor(Ancestry, levels = c("Total", setdiff(unique(Ancestry), "Total"))),
+    Group = factor(Group, levels = c("AlleleFreq_nonAD", "AlleleFreq_AD"))
+  )
+
+
+ancestryp <- ggplot(ancestry_long, aes(fill=Group, x=Ancestry, y=AlleleFreq)) +
+  geom_bar(position="dodge", stat="identity", width=0.7) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c(
+      "AlleleFreq_AD" = "#98e6ec",
+      "AlleleFreq_nonAD" = "#e0e0e0"
+    )
+  )
+ggsave(filename="rs11575896ancestry.pdf", plot=ancestryp, width=15, height=4.44, units = "in")
+
+ancestry_long_nototal <- ancestry_long %>% filter(Ancestry != "Total")
+ancestry_long_nototal <- ancestry_long_nototal %>% pivot_longer(cols = c("n_AD", "n_nonAD"), names_to="Group2", values_to = "Count")
+
+ancestryp2 <- ggplot(ancestry_long_nototal, aes(x=Group2, y=Count, fill = Ancestry)) + 
+  geom_bar(position="stack", stat="identity", show.legend = TRUE) +
+  theme_minimal() + 
+  ylab("Count") + 
+  ggtitle("ADSP AD Counts") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave(filename="ADSPancestry.pdf", plot=ancestryp2, width=4, height=4.44, units="in")
+
+
+```
+
+#acetylation and conservation
+```{r}
+
+library(tidyverse)
+library(ggplot2)
+library(plotgardener)
+library(GenomicRanges)
+library(rtracklayer)
+
+histoneAc <- import.bw("/cluster/home/jloupe/Outputs_sorted_cromwell/Sep2021_ChIPseq/H3K27ac_DLPFC-NEUN_Output/signal/pooled-rep/basename_prefix.pooled_x_basename_prefix.pooled.pval.signal.bigwig")
+histoneAc17 <- histoneAc[seqnames(histoneAc) == "chr17"]
+
+prom <- GRanges("chr17:45893336-45895735")
+histoneAcProm <- subsetByOverlaps(histoneAc, prom)
+histoneAcPromTib <- as_tibble(histoneAcProm)
+
+cons <- import.bw("/cluster/home/aanderson/cross_species/external_data/cactus241way.phyloP.bw", which = GRanges("chr17", IRanges(1, seqlengths(BigWigFile("/cluster/home/aanderson/cross_species/external_data/cactus241way.phyloP.bw"))["chr17"]))
+)
+
+#cap signal (from paperfigers.Rmd)
+avg_neurons <- read_tsv("/cluster/home/rhauser/files/rmhex02/onesidedneurons3repswithcontrolsneglog10pval.sorted.mean.bed", col_names=c("chr", "start", "end", "neglog10pval"))
+avg_neurons$start <- avg_neurons$start + 1
+avg_neurons$score <- avg_neurons$neglog10pval
+
+avg_neurons <- avg_neurons %>% arrange(by=start)
+cappedsignal <- avg_neurons %>% mutate(score=pmin(score, 15))
+```
+
+
+####mapt prom region plotgardener
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="maptprom_onetailedp05_sigline_acandcons.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45893536, chromend = 45895535, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot conservation
+consplot <- plotSignal(data = cons, params = params_a, y = 0.2, height = 0.5, fill = "#d88c9a", linecolor="#d88c9a")
+annoYaxis(plot = consplot, axisLine = TRUE, fontsize = 8, at=c(-10,9))
+
+#plot acetylation
+acplot <- plotSignal(data =histoneAcProm, params = params_a, y = 0.9, height = .5, fill = "#8E7DBE", linecolor="#8E7DBE")
+annoYaxis(plot = acplot, axisLine = TRUE, fontsize = 8, at=c(0,91))
+
+
+threshold = -log10(0.05)
+
+
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, at=c(0,15), fontsize = 8, digits=3)
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region5_onetailedp05_sigline_acandcons.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45821000, chromend = 45823000, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot conservation
+consplot <- plotSignal(data = cons, params = params_a, y = 0.2, height = 0.5, fill = "#d88c9a", linecolor="#d88c9a")
+annoYaxis(plot = consplot, axisLine = TRUE, fontsize = 8, at=c(-12,9))
+
+#plot acetylation
+acplot <- plotSignal(data =histoneAc17, params = params_a, y = 0.9, height = .5, fill = "#8E7DBE", linecolor="#8E7DBE")
+annoYaxis(plot = acplot, axisLine = TRUE, fontsize = 8,at=c(0, 5.5))
+
+
+threshold = -log10(0.05)
+
+
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, fontsize = 8, digits=3, at=c(0,4.5))
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####bri region 45971424_45972091
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="plotgardenerbri45971424_45972091_acandcons.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45971424, chromend = 45972091, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot conservation
+consplot <- plotSignal(data = cons, params = params_a, y = 0.2, height = 0.5, fill = "#d88c9a", linecolor="#d88c9a")
+annoYaxis(plot = consplot, axisLine = TRUE, fontsize = 8, at=c(-8,9))
+
+#plot acetylation
+acplot <- plotSignal(data =histoneAc17, params = params_a, y = 0.9, height = .5, fill = "#8E7DBE", linecolor="#8E7DBE")
+annoYaxis(plot = acplot, axisLine = TRUE, fontsize = 8, at=c(0,8.5))
+
+
+threshold = -log10(0.05)
+
+
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, fontsize = 8, digits=3, at=c(0,3))
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+
+####region 18
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region18_acandcons.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 45779500, chromend = 45782500, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot conservation
+consplot <- plotSignal(data = cons, params = params_a, y = 0.2, height = 0.5, fill = "#d88c9a", linecolor="#d88c9a")
+annoYaxis(plot = consplot, axisLine = TRUE, fontsize = 8, at=c(-7,7.5))
+
+#plot acetylation
+acplot <- plotSignal(data =histoneAc17, params = params_a, y = 0.9, height = .5, fill = "#8E7DBE", linecolor="#8E7DBE")
+annoYaxis(plot = acplot, axisLine = TRUE, fontsize = 8,at=c(0, 5))
+
+
+threshold = -log10(0.05)
+
+
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, fontsize = 8, digits=3,at=c(0,3))
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####region 8
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region8_acandcons.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 46029900, chromend = 46031100, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot conservation
+consplot <- plotSignal(data = cons, params = params_a, y = 0.2, height = 0.5, fill = "#d88c9a", linecolor="#d88c9a")
+annoYaxis(plot = consplot, axisLine = TRUE, fontsize = 8, at=c(-8.5,9))
+
+#plot acetylation
+acplot <- plotSignal(data =histoneAc17, params = params_a, y = 0.9, height = .5, fill = "#8E7DBE", linecolor="#8E7DBE")
+annoYaxis(plot = acplot, axisLine = TRUE, fontsize = 8, at=c(0, 12))
+
+
+threshold = -log10(0.05)
+
+
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, fontsize = 8, digits=3, at=c(0,9.5))
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+####region 9
+```{r}
+#un-comment to save as a pdf in working directory labeled Rplots.pdf
+pdf(file="region9_acandcons.pdf", width = 8, height = 4.25, onefile=FALSE)
+
+## Create a plotgardener page
+pageCreate(width = 8, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+pageGuideHide()
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 46036535, chromend = 46039410, assembly = "hg38", x = 1.5, width =5, just = c("left", "top"), default.units = "inches")
+
+ 
+#plot variation
+#plotRanges(data = variants1bed, params = params_a, order. ="random", y = .5, height = .3, collapse = TRUE, fill = "#F433AB")
+
+#plot conservation
+consplot <- plotSignal(data = cons, params = params_a, y = 0.2, height = 0.5, fill = "#d88c9a", linecolor="#d88c9a")
+annoYaxis(plot = consplot, axisLine = TRUE, fontsize = 8, at=c(-12.5, 9))
+
+#plot acetylation
+acplot <- plotSignal(data =histoneAc17, params = params_a, y = 0.9, height = .5, fill = "#8E7DBE", linecolor="#8E7DBE")
+annoYaxis(plot = acplot, axisLine = TRUE, fontsize = 8, at=c(0,25.5))
+
+
+threshold = -log10(0.05)
+
+
+
+#plot ompra
+oligologplot <- plotSignal(data = cappedsignal, params = params_a, negData = TRUE, y = 1.75, height = 0.75, fill = "#86EAE6", line = "#86EAE6")
+annoSegments(
+  x0=unit(0, "npc"), y0=threshold,
+  x1=unit(1, "npc"), y1=threshold,
+  plot=oligologplot, default.units="native",
+  linecolor = "grey40", lty=2
+)
+annoYaxis(plot = oligologplot,axisLine = TRUE, fontsize = 8, digits=3, at=c(0,6))
+
+#plot cCres
+#plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = "#F2D0A9")
+plotRanges(data = encodecres, params = params_a, order. ="width", collapse=TRUE, y = 2.75, height = .075, fill = encodecres$hexcolor)
+
+
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("black"))
+
+#making gene plot
+plotGenes(params = params_a, stroke =0.5, fontsize = 8, strandLabels = TRUE, y = 3, height =1, geneHighlights = geneHighlights, geneBackground = "black")
+
+plotGenomeLabel(params = params_a, y =4, length = 5, scale = "bp", commas=TRUE)
+
+dev.off()
+
+
+```
+
+
+
+#conservation graphing zoomins
+```{r}
+cons_tib <- as_tibble(cons)
+cons_tib_loss <- cons_tib %>% filter(between(start, 45894270, 45894299))
+
+maptactive <- ggplot(cons_tib_loss, aes(y=score, x=start)) +
+  geom_bar(stat="identity", fill="orange", color = "orange") +
+  theme_minimal() +
+  geom_hline(yintercept=0) +
+  scale_y_continuous(
+    limits = c(-5, 10),
+    breaks = seq(-5, 10),
+    expand = c(0, 0)
+  )
+ggsave(filename="maptbcalm_cons_30bases_losactivity.pdf", plot=maptactive, width=15, height=4.44, units="in")
+
+
+cons_tib_active <- cons_tib %>% filter(between(start, 45894673, 45894702))
+
+maptactive <- ggplot(cons_tib_active, aes(y=score, x=start)) +
+  geom_bar(stat="identity", fill="orange", color = "orange") +
+  theme_minimal() +
+  geom_hline(yintercept=0) +
+  scale_y_continuous(
+    limits = c(-1.5, 9),
+    breaks = seq(-1.5, 9),
+    expand = c(0, 0)
+  )
+ggsave(filename="maptbcalm_cons_30bases_gainactivity.pdf", plot=maptactive, width=15, height=4.44, units="in")
+
+```
+
+
+#plot overview figure
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(GenomicRanges)
+library(plotgardener)
+
+#all bacs
+allbacs <- read_tsv("/cluster/home/rhauser/files/rmhex01/bacslabel_original.bed", col_names=c("chr", "start", "end", "name"))
+
+#baccoverage
+cov <- read_tsv(file="/cluster/home/rhauser/files/from_nick/OutFiles.chr17.depth.bedGraph", col_names=c("chr", "start", "end", "score"))
+
+cov$end <- cov$end - 1
+cov$width <- cov$end - cov$start
+cov$strand <- '*'
+cov <- cov %>% dplyr::select(chr, start, end, width, strand, score)
+
+rnaseqregion <- GRanges(
+  seqnames = "chr17",
+  ranges = IRanges(44705302, 46838000)
+)
+
+inversionregion <- GRanges(
+  seqnames = "chr17",
+  ranges = IRanges(45307498,46836265)
+)
+
+#create ideogramtrack
+itrack <- IdeogramTrack(genome = "hg38", chromosome = "chr17")
+highlightTrack <- AnnotationTrack(
+  rnaseqregion,
+  genome = "hg38",
+  name = "BAC coverage",
+  fill = "red",
+  col = "red"
+)
+
+ht <- HighlightTrack(
+  trackList = list(highlightTrack),
+  start = start(rnaseqregion),
+  end = end(rnaseqregion)
+)
+
+pdf(file="chr17ideogram.pdf", width = 8, height = 4.25, onefile=FALSE)
+plotTracks(
+  list(itrack, ht),
+  chromosome = "chr17",
+  main = "Chromosome 17 (hg38) — highlighted region"
+)
+dev.off()
+
+
+mycrisprtargets <- GRanges(
+  seqnames = "chr17",
+  ranges= IRanges(
+    start = c(44905302, 45371797, 45803209, 45821846, 45837167, 45855626, 46030475, 46037972, 46072943, 45650602, 45828414, 45655341, 45819754, 45781206, 45893945),
+    end = c(44905302, 45371797, 45803209, 45821846, 45837167, 45855626, 46030475, 46037972, 46072943, 45650602, 45828414, 45655341, 45819754, 45781206, 45893945)
+))
+mycrisprtargets_tib <- as_tibble(mycrisprtargets)
+
+
+
+pdf(file="regionoverview_new.pdf", width = 15, height = 4.25, onefile=FALSE)
+## Create a plotgardener page
+pageCreate(width = 15, height = 4.25, default.units = "inches", showGuides=FALSE, bg=NA)
+
+#set general parameters
+params_a <- pgParams(chrom = "chr17", chromstart = 44705300, chromend = 46172143, assembly = "hg38", x = 1.5, width =12, just = c("left", "top"), default.units = "inches")
+
+#plot inversion
+#plotRanges(
+#  data = inversionregion, params = params_a, order. ="random", y = 0.7, height = .75, boxHeight = 0.15, fill = "black" 
+#)
+
+#making gene plot, highlighting MAPT, and label
+geneHighlights <- data.frame("geneName" = c("MAPT"), "color" = c("#f56d38"))
+
+plotGenes(params = params_a, stroke =0.75, fontsize =10, strandLabels = TRUE, y = 2, height =1, geneHighlights = geneHighlights, geneBackground ="#cbcbcb")
+
+plotGenomeLabel(params = params_a, y =3.5, length = 12, scale = "Mb")
+
+dev.off()
+
+
+
+
+targets <- c(44905302, 45371797, 45803209, 45821846, 45837167, 45855626, 46030475, 46037972, 46072943, 45650602, 45828414, 45655341, 45819754, 45781206, 45893945)
+
+mycrisprtargets_tib <- mycrisprtargets_tib %>% arrange(by=start)
+mycrisprtargets_tib$plotheight <- c(0, 0, 0, 0.1, 0, 0, 0.1, 0.2, 0.3, 0, 0, 0, 0, 0.1, 0)
+mycrisprtargets_tib$plotheight2 <- 0
+
+
+crisptar <- ggplot(mycrisprtargets_tib, aes(x=start, y=plotheight)) +
+  geom_point(color="#86EAE6", size=3, shape="|") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(44705300, 46172143), ylim=c(-0.5,0.5)) +
+  scale_x_continuous(breaks=c(44705300, 46172143), labels=c("44902000", "46172143"))
+ggsave(filename="crisprguidelocs_new.pdf", plot=crisptar, width=10, height=2.22, units="in")
+
+
+```
+#corr mapt promoter cell type
+```{r}
+mapt <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/neurons/bcalm_mapt_neurons_10bcthres.tsv")
+
+mapt <- mapt %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < 0 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+mapt <- mapt %>% mutate(position = as.numeric(str_extract(element, "(?<=maptprom_chr17_)[0-9]+")))
+
+#implementing a logFC thres of 0.1
+mapt <- mapt %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0.1 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < -0.1 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      adj.P.Val <= 0.05 & logFC >= -0.1 & logFC <= 0.1 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+
+# Make sure log2FoldChange is numeric
+mapt$logFC <- as.numeric(mapt$logFC)
+
+mapt$sig2 <- as.character(mapt$sig2)
+
+maptheks <- read_tsv("/cluster/home/rhauser/files/rmhex03/MPRAsnakeflowcount/bcalm/heks/bcalm_mapt_heks_10bcsthres.tsv")
+maptheks <- maptheks %>% mutate(
+    sig2 = case_when(
+      adj.P.Val <= 0.05 & logFC > 0.1 ~ "sig_up",
+      adj.P.Val <= 0.05 & logFC < -0.1 ~ "sig_down",
+      adj.P.Val > 0.05 ~ "ns",
+      adj.P.Val <= 0.05 & logFC >= -0.1 & logFC <= 0.1 ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+maptheks <- maptheks %>% mutate(position = as.numeric(str_extract(element, "(?<=maptprom_chr17_)[0-9]+")))
+maptheks$sig2 <- as.character(maptheks$sig2)
+
+maptheks_renamed <- maptheks %>%
+  rename_with(~ paste0(.x, ".heks"), .cols = -c(position, allele))
+
+maptcombined <- mapt %>%
+  inner_join(maptheks_renamed, by = c("position", "allele"))
+
+maptcombined <- maptcombined %>% mutate(
+    shared = case_when(
+      sig2 == "sig_up" & sig2.heks == "sig_up" ~ "both",
+      sig2 == "sig_down" & sig2.heks == "sig_down" ~ "both",
+      sig2 == "sig_down" & sig2.heks == "sig_up" ~ "both",
+      sig2 == "sig_up" & sig2.heks == "sig_down" ~ "both",
+      sig2 == "sig_up" & sig2.heks == "ns" ~ "signeurons",
+      sig2 == "sig_down" & sig2.heks == "ns" ~ "signeurons",
+      sig2 == "ns" & sig2.heks == "sig_up" ~ "sigheks",
+      sig2 == "ns" & sig2.heks == "sig_down" ~ "sigheks",
+      sig2 == "ns" & sig2.heks == "ns" ~ "ns",
+      TRUE    ~ NA_character_  # Fallback if none are TRUE
+    ))
+
+maptcombined$shared <- as.character(maptcombined$shared)
+maptcombined <- maptcombined %>% filter(!is.na(shared))
+
+
+maptcombined$shared <- factor(
+  maptcombined$shared,
+  levels = c("ns", "sigheks", "signeurons", "both")
+)
+
+maptcombined <- maptcombined %>% arrange(shared)
+write_tsv(maptcombined, "maptcombined.tsv")
+
+maptcellcorr <- ggplot(maptcombined, aes(x = logFC.heks, y = logFC, color = shared)) +
+  geom_point(size = 1.5) +
+  scale_color_manual(name="Adj.P.Val & logFC cutoff",
+    values = c(
+      "both"   = "#8332b5",
+      "sigheks"    = "#6acfdc",
+      "signeurons" = "#ec5bb4",
+      "ns"        = "#e0e0e0"
+    ),
+    labels = c(
+    "ns"        = "None",
+    "sigheks"    = "HEKs",
+    "signeurons" = "Neurons",
+    "both"   = "HEKs & Neurons"
+  )) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +  
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") +
+  labs(
+    x = "HEK293FT logFC",
+    y = "Neuron logFC",
+    title = "MAPT Promoter Mutagenesis \nNeurons vs. HEK293FT"
+  ) +
+  theme_classic() +
+  theme(legend.position = "right") # +
+#  scale_y_continuous(limits=c(-1.2,0.8), breaks = seq(-1.2,0.8, by =0.2), labels=scales::label_number(accuracy=0.1)) +
+#  scale_x_continuous(limits=c(-0.8,0.8), breaks=seq(-0.8,0.8, by=0.2), labels=scales::label_number(accuracy=0.1))
+ggsave(filename ="maptpromcorr_logFCcutoff_10bcthres.pdf", plot=maptcellcorr, width=5.44, height=4.44, units="in")
+res <- cor.test(maptcombined$logFC, maptcombined$logFC.heks, method = "spearman", exact =FALSE)
+
+res$estimate  # Spearmans's rho = 0.336217
+res$p.value   # P-value 1.556827e-210
+
+maptcombined_nodel <- maptcombined %>% filter(allele != "E")
+
+```
