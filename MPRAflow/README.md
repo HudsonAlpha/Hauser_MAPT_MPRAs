@@ -1,1 +1,1 @@
-These files contain minor edits to the MPRAflow .nf files that allow them to run better on our HPC setup without majorly altering the files from the original authors obtained here https://mpraflow.readthedocs.io/en/latest/ from 
+These files contain minor edits to the MPRAflow .nf files that allow them to run better on our HPC setup without majorly altering the files from the original authors obtained here: https://mpraflow.readthedocs.io/en/latest/  
