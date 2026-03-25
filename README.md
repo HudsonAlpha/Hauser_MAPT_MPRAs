@@ -12,7 +12,4 @@ Tau neurofibrillary tangles are a hallmark of several neurodegenerative diseases
 
 
 ### Data Availability
-The raw and processed data generated are available through NCBI GEO under series accession number 
-GSE325256 (Variation and Saturation Mutagenesis MPRA)
-GSE324616 (Oligo MPRA)
-GSE324430 (RNA-seq)
+The raw and processed data generated are available through NCBI GEO under series accession number GSE325670.
