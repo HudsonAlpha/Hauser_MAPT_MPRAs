@@ -1,0 +1,265 @@
+---
+title: "Untitled"
+author: "Becky"
+date: "2026-03-19"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+
+neuron_snv <- read_excel("hauserSupplementalTablesBioRxiv.xlsx", sheet = "s12 - SNVs Neurons")
+
+neuron_snv_vcf<- tibble(
+  '#CHROM' = 17,
+  POS = neuron_snv$pos,
+  ID = ".",
+  REF = neuron_snv$base_ref,
+  ALT = neuron_snv$base_alt,
+  QUAL = ".",
+  FILTER = "PASS",
+  INFO = "none"
+)
+
+neuron_snv_vcf_sort <- arrange(neuron_snv_vcf, POS)
+write_tsv(neuron_snv_vcf_sort, "neuron_snv_vcf_table.tsv")
+
+annot_snv <- as_tibble(read.table("/cluster/home/rhauser/files/rmhex03/vcfannotation/unique_neuron_annot_snv.vcf", sep="", skip = 29, col.names =c("Uploaded_variation", "Location", "Allele", "ID", "CADD_PHRED")))
+annot_snv <- annot_snv %>% separate(col = Uploaded_variation,
+           into = c("chrom", "pos", "bases"),
+           sep = "_") %>%
+  separate(col = bases,
+           into = c("base_ref", "base_alt"),
+           sep = "/")
+sanitycheck_annot_snv <- annot_snv %>%
+  filter(base_alt != Allele)
+annot_snv_subset <- annot_snv %>% select(pos, base_ref, base_alt, ID, CADD_PHRED)
+annot_snv_subset$pos <- as.double(annot_snv_subset$pos)
+
+neuron_snv_merged <- neuron_snv %>%
+  left_join(annot_snv_subset,
+            by = c("pos", "base_ref", "base_alt"))
+
+write_tsv(neuron_snv_merged, "/cluster/home/rhauser/files/rmhex03/vcfannotation/neuron_snv_labled.tsv")
+```
+
+```{R}
+hek_snv <- read_excel("hauserSupplementalTablesBioRxiv.xlsx", sheet = "s13 - SNVs HEKs")
+
+hek_snv_vcf<- tibble(
+  '#CHROM' = 17,
+  POS = hek_snv$pos,
+  ID = ".",
+  REF = hek_snv$base_ref,
+  ALT = hek_snv$base_alt,
+  QUAL = ".",
+  FILTER = "PASS",
+  INFO = "none"
+)
+
+hek_snv_vcf_sort <- arrange(hek_snv_vcf, POS)
+write_tsv(hek_snv_vcf_sort, "/cluster/home/rhauser/files/rmhex03/vcfannotation/hek_snv_vcf_table.tsv")
+
+
+
+
+
+
+annot_snv_hek <- as_tibble(read.table("/cluster/home/rhauser/files/rmhex03/vcfannotation/unique_annot_hek_snv.tab", sep="", skip = 29, col.names =c("Location", "Uploaded_variation", "Allele", "ID", "CADD_PHRED")))
+annot_snv_hek  <- annot_snv_hek  %>% separate(col = Uploaded_variation,
+           into = c("chrom", "pos", "bases"),
+           sep = "_") %>%
+  separate(col = bases,
+           into = c("base_ref", "base_alt"),
+           sep = "/")
+sanitycheck_annot_snv_hek  <- annot_snv_hek  %>%
+  filter(base_alt != Allele)
+annot_snv_hek_subset <-annot_snv_hek %>% select(pos, base_ref, base_alt, ID, CADD_PHRED)
+annot_snv_hek_subset$pos <- as.double(annot_snv_hek$pos)
+
+hek_snv_merged <- hek_snv %>%
+  left_join(annot_snv_hek_subset,
+            by = c("pos", "base_ref", "base_alt"))
+
+write_tsv(hek_snv_merged, "/cluster/home/rhauser/files/rmhex03/vcfannotation/hek_snv_labled.tsv")
+
+
+```
+
+```{r}
+neuron_indels <- read_excel("hauserSupplementalTablesBioRxiv.xlsx", sheet = "s10 - InDels Neurons")
+
+neuron_indels_vcf<- tibble(
+  '#CHROM' = 17,
+  POS = neuron_indels$pos,
+  ID = ".",
+  REF = neuron_indels$base_ref,
+  ALT = neuron_indels$base_alt,
+  QUAL = ".",
+  FILTER = "PASS",
+  INFO = "none"
+)
+
+neuron_indels_vcf_sort <- arrange(neuron_indels_vcf, POS)
+write_tsv(neuron_indels_vcf_sort, "/cluster/home/rhauser/files/rmhex03/vcfannotation/neuron_indels_vcf_table.tsv")
+
+
+
+
+annot_neuron_indels <- as_tibble(read.table("/cluster/home/rhauser/files/rmhex03/vcfannotation/unique_annot_neuron_indels.taab", sep="", skip = 29, col.names =c("Location", "Uploaded_variation", "Allele", "ID", "CADD_PHRED")))
+annot_neuron_indels  <- annot_neuron_indels  %>% separate(col = Uploaded_variation,
+           into = c("chrom", "pos", "bases"),
+           sep = "_") %>%
+  separate(col = bases,
+           into = c("base_ref", "base_alt"),
+           sep = "/")
+annot_neuron_indels <- annot_neuron_indels %>%  mutate(
+    pos_new = as.double(str_extract(Location, "(?<=:)\\d+"))
+  )
+annot_neuron_inserts <- annot_neuron_indels %>% filter(base_ref == "-")
+annot_neuron_deletions <- annot_neuron_indels %>% filter(base_alt == "-")
+
+annot_neuron_deletions$pos_new <- annot_neuron_deletions$pos_new - 1
+
+new_annot_neuron_indels <- rbind(annot_neuron_deletions, annot_neuron_inserts)
+new_annot_neuron_indels <- new_annot_neuron_indels %>% select(pos_new, ID)
+new_annot_neuron_indels <- new_annot_neuron_indels %>% rename(pos = pos_new)
+
+neuron_indels_merged <- neuron_indels %>%
+  left_join(new_annot_neuron_indels,
+            by = c("pos"))
+
+write_tsv(neuron_indels_merged, "/cluster/home/rhauser/files/rmhex03/vcfannotation/neuron_indels_labled.tsv")
+
+
+```
+
+```{r}
+hek_indels <- read_excel("hauserSupplementalTablesBioRxiv.xlsx", sheet = "s11 - InDels HEKs")
+
+hek_indels_vcf<- tibble(
+  '#CHROM' = 17,
+  POS = hek_indels$pos,
+  ID = ".",
+  REF = hek_indels$base_ref,
+  ALT = hek_indels$base_alt,
+  QUAL = ".",
+  FILTER = "PASS",
+  INFO = "none"
+)
+
+hek_indels_vcf_sort <- arrange(hek_indels_vcf, POS)
+write_tsv(hek_indels_vcf_sort, "/cluster/home/rhauser/files/rmhex03/vcfannotation/hek_indels_vcf_table.tsv")
+
+
+annot_hek_indels <- as_tibble(read.table("/cluster/home/rhauser/files/rmhex03/vcfannotation/unique_annot_hek_indels.tab", sep="", skip = 29, col.names =c("Location", "Uploaded_variation", "Allele", "ID", "CADD_PHRED")))
+annot_hek_indels  <- annot_hek_indels  %>% separate(col = Uploaded_variation,
+           into = c("chrom", "pos", "bases"),
+           sep = "_") %>%
+  separate(col = bases,
+           into = c("base_ref", "base_alt"),
+           sep = "/")
+annot_hek_indels <- annot_hek_indels %>%  mutate(
+    pos_new = as.double(str_extract(Location, "(?<=:)\\d+"))
+  )
+annot_hek_inserts <- annot_hek_indels %>% filter(base_ref == "-")
+annot_hek_deletions <- annot_hek_indels %>% filter(base_alt == "-")
+
+annot_hek_deletions$pos_new <- annot_hek_deletions$pos_new- 1
+
+new_annot_hek_indels <- rbind(annot_hek_deletions, annot_hek_inserts)
+new_annot_hek_indels <- new_annot_hek_indels %>% select(pos_new, ID)
+new_annot_hek_indels <- new_annot_hek_indels %>% rename(pos = pos_new)
+
+hek_indels_merged <- hek_indels %>%
+  left_join(new_annot_hek_indels,
+            by = c("pos"))
+
+write_tsv(hek_indels_merged, "/cluster/home/rhauser/files/rmhex03/vcfannotation/hek_indels_labled.tsv")
+
+
+
+```
+
+
+```{r}
+hek_mapt <- read_excel("hauserSupplementalTablesBioRxiv.xlsx", sheet = "s15 - MAPT prom HEKs")
+
+hek_mapt_vcf<- tibble(
+  '#CHROM' = 17,
+  POS = hek_mapt$position,
+  ID = ".",
+  REF = hek_mapt$base_ref,
+  ALT = hek_mapt$base_alt,
+  QUAL = ".",
+  FILTER = "PASS",
+  INFO = "none"
+)
+
+hek_mapt_vcf_sort <- arrange(hek_mapt_vcf, POS)
+write_tsv(hek_mapt_vcf_sort, "/cluster/home/rhauser/files/rmhex03/vcfannotation/hek_mapt_vcf_table.tsv")
+
+
+
+annot_hek_mapt <- as_tibble(read.table("/cluster/home/rhauser/files/rmhex03/vcfannotation/unique_annot_hek_mapt.tab", sep="", skip = 29, col.names =c("Location", "Uploaded_variation", "Allele", "ID", "CADD_PHRED")))
+annot_hek_mapt  <- annot_hek_mapt  %>% separate(col = Uploaded_variation,
+           into = c("chrom", "pos", "bases"),
+           sep = "_") %>%
+  separate(col = bases,
+           into = c("base_ref", "base_alt"),
+           sep = "/")
+sanitycheck_annot_hek_mapt  <- annot_hek_mapt  %>%
+  filter(base_alt != Allele)
+annot_hek_mapt_subset <-annot_hek_mapt %>% select(pos, base_ref, base_alt, ID, CADD_PHRED)
+annot_hek_mapt_subset <-annot_hek_mapt_subset %>% filter(base_alt != "DELETION")
+annot_hek_mapt_subset$pos <- as.double(annot_hek_mapt_subset$pos)
+
+hek_mapt <- hek_mapt %>% rename(pos = position)
+hek_mapt_merged <- hek_mapt %>%
+  left_join(annot_hek_mapt_subset,
+            by = c("pos", "base_ref", "base_alt"))
+
+write_tsv(hek_mapt_merged, "/cluster/home/rhauser/files/rmhex03/vcfannotation/hek_mapt_labled.tsv")
+
+```
+
+```{r}
+neuron_mapt <- read_excel("hauserSupplementalTablesBioRxiv.xlsx", sheet = "s14 - MAPT prom Neurons")
+
+neuron_mapt_vcf<- tibble(
+  '#CHROM' = 17,
+  POS = neuron_mapt$pos,
+  ID = ".",
+  REF = neuron_mapt$base_ref,
+  ALT = neuron_mapt$base_alt,
+  QUAL = ".",
+  FILTER = "PASS",
+  INFO = "none"
+)
+
+neuron_mapt_vcf_sort <- arrange(neuron_mapt_vcf, POS)
+write_tsv(neuron_mapt_vcf_sort, "/cluster/home/rhauser/files/rmhex03/vcfannotation/neuron_mapt_vcf_table.tsv")
+
+annot_neuron_mapt <- as_tibble(read.table("/cluster/home/rhauser/files/rmhex03/vcfannotation/unique_annot_neuron_mapt.tab", sep="", skip = 29, col.names =c("Location", "Uploaded_variation", "Allele", "ID", "CADD_PHRED")))
+annot_neuron_mapt  <- annot_neuron_mapt  %>% separate(col = Uploaded_variation,
+           into = c("chrom", "pos", "bases"),
+           sep = "_") %>%
+  separate(col = bases,
+           into = c("base_ref", "base_alt"),
+           sep = "/")
+sanitycheck_annot_neuron_mapt <- annot_neuron_mapt  %>%
+  filter(base_alt != Allele)
+annot_neuron_mapt_subset <-annot_neuron_mapt %>% select(pos, base_ref, base_alt, ID, CADD_PHRED)
+annot_neuron_mapt_subset <-annot_neuron_mapt_subset %>% filter(base_alt != "DELETION")
+annot_neuron_mapt_subset$pos <- as.double(annot_neuron_mapt_subset$pos)
+
+#neuron_mapt <- neuron_mapt%>% rename(pos = position)
+neuron_mapt_merged <- neuron_mapt %>%
+  left_join(annot_neuron_mapt_subset,
+            by = c("pos", "base_ref", "base_alt"))
+
+write_tsv(neuron_mapt_merged, "/cluster/home/rhauser/files/rmhex03/vcfannotation/neuron_mapt_labled.tsv")
+
+
+```
