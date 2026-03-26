@@ -1,6 +1,6 @@
 # Promoter mutagenesis and a massively parallel reporter screen of the MAPT locus identifies cis-regulatory elements and genetic variant effects
 
-### [BioRxiv pre-print](https://www.biorxiv.org/content/10.64898/2026.03.06.710116v1)
+### [BioRxiv pre-print](https://www.biorxiv.org/content/10.64898/2026.03.06.710116v2)
 
 ## Code Availability
 All code generated for this manuscript is availble in this repository.
