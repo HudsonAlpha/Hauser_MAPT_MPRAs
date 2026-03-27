@@ -1,4 +1,3 @@
-  GNU nano 5.6.1                                                                                                                 namechange.sh                                                                                                                           
 #!/bin/bash
 # Replace all occurences of becky with oligoMPRA, bri with internal
 # Create a backup first (filename.oldnames)
